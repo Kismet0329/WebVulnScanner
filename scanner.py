@@ -1,0 +1,136 @@
+# scanner.py
+import sys
+import logging
+from config import parse_args, DEFAULT_CONFIG
+from http_client import HttpClient
+from rate_limiter import TokenBucket
+from crawler import Crawler
+from plugin_loader import load_plugins
+from reporter import generate_html_report, generate_json_report
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from utils import normalize_url
+
+def setup_logging(log_file="scanner.log"):
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler(log_file, encoding='utf-8'),
+            logging.StreamHandler()
+        ]
+    )
+    return logging.getLogger("WebVulnScanner")
+
+def main():
+    args = parse_args()
+    logger = setup_logging()
+
+    # 创建限速器（带抖动）
+    rate_limiter = TokenBucket(rate=args.rate, capacity=args.burst, jitter=args.jitter)
+    
+    # 创建插件实例
+    plugins = []
+    for cls in plugin_classes:
+        plugins.append(cls(
+            http_client=client,
+            rate_limiter=rate_limiter,
+            logger=logger,
+            skip_params=args.skip_params,
+            fixed_delay=args.fixed_delay
+        ))
+    
+    # 解析插件过滤参数
+    only_plugins = args.only_plugins.split(',') if args.only_plugins else None
+    exclude_plugins = args.exclude_plugins.split(',') if args.exclude_plugins else None
+    
+    if args.list_plugins:
+        plugin_classes = load_plugins()
+        print("可用插件:")
+        for cls in plugin_classes:
+            print(f"- {cls.name}: {cls.description} (severity: {cls.severity})")
+        return
+
+    # 创建HTTP客户端
+    client = HttpClient(
+        proxy=args.proxy,
+        timeout=args.timeout,
+        verify_ssl=False,
+        user_agent=DEFAULT_CONFIG["user_agent"],
+        headers=args.header,
+        cookies=args.cookie
+    )
+
+    # 登录
+    if args.login_url:
+        if not client.login(args.login_url, args.username, args.password, args.username_field, args.password_field):
+            logger.warning("登录可能失败，继续扫描...")
+
+    # 创建限速器
+    rate_limiter = TokenBucket(rate=args.rate, capacity=args.burst)
+
+    # 加载插件
+    plugin_classes = load_plugins(only=only_plugins, exclude=exclude_plugins)
+    plugins = []
+    for cls in plugin_classes:
+        plugins.append(cls(client, rate_limiter, logger))
+    logger.info(f"已加载插件: {[p.name for p in plugins]}")
+
+    # 爬取目标
+    crawler = Crawler(
+        client, rate_limiter,
+        depth=args.depth,
+        max_urls=args.max_urls,
+        allow_external=args.allow_external,
+        js_render=args.js_render,
+        logger=logger
+    )
+    targets = crawler.crawl(args.url)
+    logger.info(f"爬取完成，待扫描目标数量: {len(targets)}")
+
+    if not targets:
+        logger.warning("没有发现可扫描的URL，退出。")
+        return
+
+    # 执行扫描
+    results = []
+    with ThreadPoolExecutor(max_workers=args.threads) as executor:
+        futures = {}
+        for target in targets:
+            for plugin in plugins:
+                # 每个插件对每个目标提交一个任务
+                future = executor.submit(plugin.check, target)
+                futures[future] = (plugin.name, target)
+        for future in as_completed(futures):
+            plugin_name, target = futures[future]
+            try:
+                found, result = future.result()
+                if found:
+                    # 补充URL信息
+                    result["url"] = target["url"]
+                    result["method"] = target["method"]
+                    results.append(result)
+                    logger.warning(f"发现漏洞: {plugin_name} - {target['url']} ({result['severity']})")
+            except Exception as e:
+                logger.error(f"插件 {plugin_name} 在 {target['url']} 出错: {e}")
+
+    # 去重（同一URL同一插件同一漏洞类型）
+    seen = set()
+    unique_results = []
+    for r in results:
+        key = (r["url"], r["plugin"], r.get("type", ""))
+        if key not in seen:
+            seen.add(key)
+            unique_results.append(r)
+
+    logger.info(f"扫描完成，发现 {len(unique_results)} 个漏洞（去重后）")
+
+    # 生成报告
+    html_file = generate_html_report(unique_results, args.url, f"{args.output}.html")
+    json_file = generate_json_report(unique_results, args.url, f"{args.output}.json")
+    logger.info(f"报告已保存: {html_file}, {json_file}")
+
+    # 清理
+    client.close()
+
+if __name__ == "__main__":
+    main()

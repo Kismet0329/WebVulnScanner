@@ -1,0 +1,23 @@
+# 虚拟环境
+venv/
+env/
+.venv/
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+*.pyo
+
+# 扫描日志和报告
+*.log
+report.html
+report.json
+*.html
+*.json
+
+# IDE
+.vscode/
+.idea/
+
+# 其他
+.DS_Store
