@@ -37,7 +37,7 @@ def main():
     client = HttpClient(
         proxy=args.proxy,
         timeout=args.timeout,
-        verify_ssl=False,
+        verify_ssl=DEFAULT_CONFIG["verify_ssl"],
         user_agent=DEFAULT_CONFIG["user_agent"],
         headers=args.header,
         cookies=args.cookie

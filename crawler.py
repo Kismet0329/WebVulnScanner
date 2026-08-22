@@ -1,7 +1,7 @@
 import json
 import requests
 from bs4 import BeautifulSoup
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin, urlparse, urlencode
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import logging
 from utils import normalize_url
@@ -38,9 +38,9 @@ class Crawler:
                     break
                 for url, depth in batch:
                     future = executor.submit(self._process_url, url, depth)
-                    futures[future] = url
+                    futures[future] = (url, depth)
                 for future in as_completed(futures):
-                    url = futures[future]
+                    url, depth = futures[future]
                     try:
                         new_links = future.result()
                         if new_links:
@@ -85,7 +85,7 @@ class Crawler:
                 if name:
                     params[name] = inp.get("value", "")
             if method == "get":
-                full_url_with_params = full_action + "?" + "&".join([f"{k}={v}" for k, v in params.items()])
+                full_url_with_params = full_action + "?" + urlencode(params)
                 if self._is_valid_url(full_url_with_params):
                     new_links.add(normalize_url(full_url_with_params))
             else:
