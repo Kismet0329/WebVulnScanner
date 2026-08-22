@@ -1,6 +1,6 @@
 # plugins/sensitive_files.py
 from .base import ScannerPlugin
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse  # 补上 urlparse
 
 class SensitiveFilesPlugin(ScannerPlugin):
     name = "sensitive_files"
@@ -12,7 +12,7 @@ class SensitiveFilesPlugin(ScannerPlugin):
         "/.git/config": ["[core]", "repositoryformatversion"],
         "/.svn/entries": ["dir", "file"],
         "/.env": ["APP_ENV", "DB_PASSWORD", "SECRET_KEY"],
-        "/robots.txt": None,  # 任何内容都算，但需要特殊判断
+        "/robots.txt": None,
         "/crossdomain.xml": ["<cross-domain-policy>"],
         "/web.config": ["<configuration>", "connectionStrings"],
         "/phpinfo.php": ["PHP Version", "phpinfo"],
@@ -26,7 +26,7 @@ class SensitiveFilesPlugin(ScannerPlugin):
         "/adminer.php": ["Adminer"],
         "/.gitignore": ["*.log", "node_modules"],
         "/sitemap.xml": ["<urlset"],
-        "/backup.zip": None,  # 需要检查Content-Type
+        "/backup.zip": None,
     }
 
     def check_get(self, url):
@@ -71,3 +71,5 @@ class SensitiveFilesPlugin(ScannerPlugin):
                                 {"url": test_url, "size": len(content)}
                             )
         return False, {}
+
+    # 注意：check_post 方法继承自基类，默认返回 (False, {})，无需覆盖
