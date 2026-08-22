@@ -1,15 +1,9 @@
-# rate_limiter.py
 import time
 import threading
 import random
 
 class TokenBucket:
     def __init__(self, rate, capacity, jitter=0.0):
-        """
-        :param rate: 每秒补充令牌数
-        :param capacity: 桶容量（允许突发请求数）
-        :param jitter: 抖动比例，例如0.2表示在基础间隔上增加±20%的随机延迟
-        """
         self.rate = rate
         self.capacity = capacity
         self.jitter = jitter

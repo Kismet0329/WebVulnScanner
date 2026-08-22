@@ -1,4 +1,3 @@
-# scanner.py
 import sys
 import logging
 from config import parse_args, DEFAULT_CONFIG
@@ -9,7 +8,6 @@ from plugin_loader import load_plugins
 from reporter import generate_html_report, generate_json_report
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from utils import normalize_url
-
 
 def setup_logging(log_file="scanner.log"):
     logging.basicConfig(
@@ -22,12 +20,10 @@ def setup_logging(log_file="scanner.log"):
     )
     return logging.getLogger("WebVulnScanner")
 
-
 def main():
     args = parse_args()
     logger = setup_logging()
 
-    # 处理 --list-plugins 选项，提前退出
     if args.list_plugins:
         plugin_classes = load_plugins()
         print("可用插件:")
@@ -35,11 +31,9 @@ def main():
             print(f"- {cls.name}: {cls.description} (severity: {cls.severity})")
         return
 
-    # 解析插件过滤参数
     only_plugins = args.only_plugins.split(',') if args.only_plugins else None
     exclude_plugins = args.exclude_plugins.split(',') if args.exclude_plugins else None
 
-    # 创建 HTTP 客户端
     client = HttpClient(
         proxy=args.proxy,
         timeout=args.timeout,
@@ -49,19 +43,14 @@ def main():
         cookies=args.cookie
     )
 
-    # 登录（如果需要）
     if args.login_url:
         if not client.login(args.login_url, args.username, args.password,
                             args.username_field, args.password_field):
             logger.warning("登录可能失败，继续扫描...")
 
-    # 创建限速器（带抖动）
     rate_limiter = TokenBucket(rate=args.rate, capacity=args.burst, jitter=args.jitter)
 
-    # 加载插件类
     plugin_classes = load_plugins(only=only_plugins, exclude=exclude_plugins)
-
-    # 实例化插件（使用统一的关键字参数）
     plugins = []
     for cls in plugin_classes:
         plugins.append(cls(
@@ -73,7 +62,6 @@ def main():
         ))
     logger.info(f"已加载插件: {[p.name for p in plugins]}")
 
-    # 爬取目标
     crawler = Crawler(
         client, rate_limiter,
         depth=args.depth,
@@ -89,7 +77,6 @@ def main():
         logger.warning("没有发现可扫描的URL，退出。")
         return
 
-    # 执行扫描
     results = []
     with ThreadPoolExecutor(max_workers=args.threads) as executor:
         futures = {}
@@ -97,7 +84,6 @@ def main():
             for plugin in plugins:
                 future = executor.submit(plugin.check, target)
                 futures[future] = (plugin.name, target)
-
         for future in as_completed(futures):
             plugin_name, target = futures[future]
             try:
@@ -110,7 +96,6 @@ def main():
             except Exception as e:
                 logger.error(f"插件 {plugin_name} 在 {target['url']} 出错: {e}")
 
-    # 去重（同一URL同一插件同一漏洞类型）
     seen = set()
     unique_results = []
     for r in results:
@@ -121,14 +106,11 @@ def main():
 
     logger.info(f"扫描完成，发现 {len(unique_results)} 个漏洞（去重后）")
 
-    # 生成报告
     html_file = generate_html_report(unique_results, args.url, f"{args.output}.html")
     json_file = generate_json_report(unique_results, args.url, f"{args.output}.json")
     logger.info(f"报告已保存: {html_file}, {json_file}")
 
-    # 清理
     client.close()
-
 
 if __name__ == "__main__":
     main()

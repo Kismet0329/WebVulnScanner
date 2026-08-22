@@ -1,4 +1,3 @@
-# plugins/unauthorized_access.py
 from .base import ScannerPlugin
 from urllib.parse import urljoin
 

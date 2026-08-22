@@ -1,11 +1,8 @@
-# reporter.py
 import json
 from datetime import datetime
-from jinja2 import Template, Environment, FileSystemLoader
+from jinja2 import Template
 
-def generate_html_report(results, target, output_file="report.html", template_dir=None):
-    """生成HTML报告"""
-    # 可以自定义模板，这里使用内嵌模板
+def generate_html_report(results, target, output_file="report.html"):
     html_template = """
 <!DOCTYPE html>
 <html>
@@ -31,7 +28,6 @@ def generate_html_report(results, target, output_file="report.html", template_di
     <p>目标：<strong>{{ target }}</strong></p>
     <p>扫描时间：{{ scan_time }}</p>
     <p>漏洞总数：{{ results|length }}</p>
-    
     <h2>漏洞列表</h2>
     {% if results %}
     <table>

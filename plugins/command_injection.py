@@ -1,4 +1,3 @@
-# plugins/command_injection.py
 import random
 import string
 from .base import ScannerPlugin

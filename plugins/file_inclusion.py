@@ -1,4 +1,3 @@
-# plugins/file_inclusion.py
 from .base import ScannerPlugin
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 

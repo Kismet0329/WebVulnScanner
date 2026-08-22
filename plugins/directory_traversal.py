@@ -1,4 +1,3 @@
-# plugins/directory_traversal.py
 from .base import ScannerPlugin
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
@@ -19,13 +18,11 @@ class DirectoryTraversalPlugin(ScannerPlugin):
     ]
 
     def check_get(self, url):
-        # 先测试查询参数
         testable = self.get_testable_params(url, method="GET")
         for param, original_value in testable.items():
             result = self._test_param(url, param, original_value, method="GET")
             if result:
                 return True, result
-        # 再测试路径拼接
         return self._test_path(url)
 
     def check_post(self, url, params):
@@ -53,7 +50,6 @@ class DirectoryTraversalPlugin(ScannerPlugin):
                     test_params[param] = payload
                     resp = self.safe_request("POST", url, data=test_params)
                 if resp and self._has_file_content(resp.text, signatures):
-                    # 二次验证
                     if method == "GET":
                         resp2 = self.safe_request("GET", test_url)
                     else:

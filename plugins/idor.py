@@ -1,4 +1,3 @@
-# plugins/idor.py
 import re
 from .base import ScannerPlugin
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
@@ -42,15 +41,10 @@ class IDORPlugin(ScannerPlugin):
         modified_resp = self._send_with_id(url, param, new_id, method, params)
         if not modified_resp:
             return None
-
-        # 使用净化后的内容进行相似度比较
         normal_content = get_meaningful_content(normal_resp.text)
         modified_content = get_meaningful_content(modified_resp.text)
         similarity = response_similarity(normal_content, modified_content)
-
-        # 如果相似度较低且两个响应都成功，提示可能存在越权
         if similarity < 0.5 and normal_resp.status_code == 200 and modified_resp.status_code == 200:
-            # 可进一步检查是否包含用户数据特征，这里简化
             return self._build_result(
                 "idor",
                 f"参数 {param} 修改 ID 从 {original_id} 到 {new_id} 后返回不同内容，可能存在水平越权",

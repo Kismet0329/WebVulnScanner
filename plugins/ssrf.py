@@ -1,4 +1,3 @@
-# plugins/ssrf.py
 from .base import ScannerPlugin
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 import random, string
@@ -11,7 +10,6 @@ class SSRFPlugin(ScannerPlugin):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.marker = ''.join(random.choices(string.ascii_letters + string.digits, k=10))
-        # 可替换为 DNSLog 地址
         self.test_url = f"http://127.0.0.1:1/{self.marker}"
 
     def check_get(self, url):

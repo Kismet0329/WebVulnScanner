@@ -1,4 +1,3 @@
-# plugins/sensitive_files.py
 from .base import ScannerPlugin
 from urllib.parse import urljoin, urlparse
 
@@ -32,15 +31,12 @@ class SensitiveFilesPlugin(ScannerPlugin):
         base = url.rstrip('/')
         paths_to_test = set()
         paths_to_test.add(base)
-
-        # 正确获取路径
         parsed = urlparse(base)
         path = parsed.path
         parts = path.split('/')
         for i in range(len(parts)-1, -1, -1):
             dir_url = urljoin(base, "/".join(parts[:i]) + "/")
             paths_to_test.add(dir_url.rstrip('/'))
-
         for path_url in paths_to_test:
             for file_path, signatures in self.SENSITIVE_FILES.items():
                 test_url = path_url + file_path if not path_url.endswith(file_path) else path_url
