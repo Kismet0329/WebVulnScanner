@@ -10,6 +10,7 @@ from reporter import generate_html_report, generate_json_report
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from utils import normalize_url
 
+
 def setup_logging(log_file="scanner.log"):
     logging.basicConfig(
         level=logging.INFO,
@@ -21,28 +22,12 @@ def setup_logging(log_file="scanner.log"):
     )
     return logging.getLogger("WebVulnScanner")
 
+
 def main():
     args = parse_args()
     logger = setup_logging()
 
-    # 创建限速器（带抖动）
-    rate_limiter = TokenBucket(rate=args.rate, capacity=args.burst, jitter=args.jitter)
-    
-    # 创建插件实例
-    plugins = []
-    for cls in plugin_classes:
-        plugins.append(cls(
-            http_client=client,
-            rate_limiter=rate_limiter,
-            logger=logger,
-            skip_params=args.skip_params,
-            fixed_delay=args.fixed_delay
-        ))
-    
-    # 解析插件过滤参数
-    only_plugins = args.only_plugins.split(',') if args.only_plugins else None
-    exclude_plugins = args.exclude_plugins.split(',') if args.exclude_plugins else None
-    
+    # 处理 --list-plugins 选项，提前退出
     if args.list_plugins:
         plugin_classes = load_plugins()
         print("可用插件:")
@@ -50,7 +35,11 @@ def main():
             print(f"- {cls.name}: {cls.description} (severity: {cls.severity})")
         return
 
-    # 创建HTTP客户端
+    # 解析插件过滤参数
+    only_plugins = args.only_plugins.split(',') if args.only_plugins else None
+    exclude_plugins = args.exclude_plugins.split(',') if args.exclude_plugins else None
+
+    # 创建 HTTP 客户端
     client = HttpClient(
         proxy=args.proxy,
         timeout=args.timeout,
@@ -60,19 +49,28 @@ def main():
         cookies=args.cookie
     )
 
-    # 登录
+    # 登录（如果需要）
     if args.login_url:
-        if not client.login(args.login_url, args.username, args.password, args.username_field, args.password_field):
+        if not client.login(args.login_url, args.username, args.password,
+                            args.username_field, args.password_field):
             logger.warning("登录可能失败，继续扫描...")
 
-    # 创建限速器
-    rate_limiter = TokenBucket(rate=args.rate, capacity=args.burst)
+    # 创建限速器（带抖动）
+    rate_limiter = TokenBucket(rate=args.rate, capacity=args.burst, jitter=args.jitter)
 
-    # 加载插件
+    # 加载插件类
     plugin_classes = load_plugins(only=only_plugins, exclude=exclude_plugins)
+
+    # 实例化插件（使用统一的关键字参数）
     plugins = []
     for cls in plugin_classes:
-        plugins.append(cls(client, rate_limiter, logger))
+        plugins.append(cls(
+            http_client=client,
+            rate_limiter=rate_limiter,
+            logger=logger,
+            skip_params=args.skip_params,
+            fixed_delay=args.fixed_delay
+        ))
     logger.info(f"已加载插件: {[p.name for p in plugins]}")
 
     # 爬取目标
@@ -97,15 +95,14 @@ def main():
         futures = {}
         for target in targets:
             for plugin in plugins:
-                # 每个插件对每个目标提交一个任务
                 future = executor.submit(plugin.check, target)
                 futures[future] = (plugin.name, target)
+
         for future in as_completed(futures):
             plugin_name, target = futures[future]
             try:
                 found, result = future.result()
                 if found:
-                    # 补充URL信息
                     result["url"] = target["url"]
                     result["method"] = target["method"]
                     results.append(result)
@@ -131,6 +128,7 @@ def main():
 
     # 清理
     client.close()
+
 
 if __name__ == "__main__":
     main()
