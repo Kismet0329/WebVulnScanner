@@ -6,6 +6,7 @@ class DirectoryTraversalPlugin(ScannerPlugin):
     description = "目录遍历漏洞检测"
     severity = "high"
 
+    # 敏感文件特征（全部使用列表）
     FILE_SIGNATURES = {
         "etc/passwd": ["root:", "daemon:", "bin:"],
         "boot.ini": ["[boot loader]"],
@@ -50,10 +51,8 @@ class DirectoryTraversalPlugin(ScannerPlugin):
                     test_params[param] = payload
                     resp = self.safe_request("POST", url, data=test_params)
                 if resp and self._has_file_content(resp.text, signatures):
-                    if method == "GET":
-                        resp2 = self.safe_request("GET", test_url)
-                    else:
-                        resp2 = self.safe_request("POST", url, data=test_params)
+                    # 二次验证
+                    resp2 = self.safe_request("GET", test_url) if method == "GET" else self.safe_request("POST", url, data=test_params)
                     if resp2 and self._has_file_content(resp2.text, signatures):
                         return self._build_result(
                             "directory_traversal",
@@ -79,4 +78,5 @@ class DirectoryTraversalPlugin(ScannerPlugin):
         return None
 
     def _has_file_content(self, text, signatures):
+        # 所有特征都必须出现，降低误报
         return all(sig in text for sig in signatures)

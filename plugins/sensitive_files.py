@@ -6,62 +6,48 @@ class SensitiveFilesPlugin(ScannerPlugin):
     description = "常见敏感文件与信息泄露检测"
     severity = "medium"
 
+    # 文件路径 -> 内容特征关键词（使用列表，避免 None 解包）
     SENSITIVE_FILES = {
         "/.git/config": ["[core]", "repositoryformatversion"],
         "/.svn/entries": ["dir", "file"],
         "/.env": ["APP_ENV", "DB_PASSWORD", "SECRET_KEY"],
-        "/robots.txt": None,
+        "/robots.txt": ["User-agent", "Disallow"],
         "/crossdomain.xml": ["<cross-domain-policy>"],
         "/web.config": ["<configuration>", "connectionStrings"],
         "/phpinfo.php": ["PHP Version", "phpinfo"],
         "/server-status": ["Apache Server Status"],
         "/.DS_Store": ["Bud1"],
         "/.htaccess": ["AuthType", "RewriteEngine"],
-        "/.bash_history": ["#", "cd "],
         "/config.php.bak": ["<?php", "DB_"],
         "/database.sql": ["CREATE TABLE", "INSERT INTO"],
         "/wp-config.php.bak": ["DB_NAME", "DB_USER"],
         "/adminer.php": ["Adminer"],
         "/.gitignore": ["*.log", "node_modules"],
         "/sitemap.xml": ["<urlset"],
-        "/backup.zip": None,
     }
 
     def check_get(self, url):
+        # 仅测试根域名和主路径，避免拼接出奇怪 URL
         base = url.rstrip('/')
-        paths_to_test = set()
-        paths_to_test.add(base)
+        candidates = [base]
+        # 添加父目录（最多一层，防止过度拼接）
         parsed = urlparse(base)
         path = parsed.path
-        parts = path.split('/')
-        for i in range(len(parts)-1, -1, -1):
-            dir_url = urljoin(base, "/".join(parts[:i]) + "/")
-            paths_to_test.add(dir_url.rstrip('/'))
-        for path_url in paths_to_test:
-            for file_path, signatures in self.SENSITIVE_FILES.items():
-                test_url = path_url + file_path if not path_url.endswith(file_path) else path_url
+        if path and path != '/':
+            parent = base.rsplit('/', 1)[0]
+            candidates.append(parent)
+
+        for path_url in candidates:
+            for file_path, keywords in self.SENSITIVE_FILES.items():
+                test_url = path_url + file_path
                 resp = self.safe_request("GET", test_url, timeout=10)
                 if resp and resp.status_code == 200:
                     content = resp.text
-                    if file_path == "/robots.txt":
-                        if "User-agent" in content or "Disallow" in content:
-                            return self._build_result(
-                                "sensitive_file",
-                                f"发现敏感文件: {file_path}",
-                                {"url": test_url, "content": content[:100]}
-                            )
-                    elif signatures:
-                        if any(sig in content for sig in signatures):
-                            return self._build_result(
-                                "sensitive_file",
-                                f"发现敏感文件: {file_path}",
-                                {"url": test_url, "evidence": content[:200]}
-                            )
-                    else:
-                        if "text" in resp.headers.get("Content-Type", "") or len(content) > 0:
-                            return self._build_result(
-                                "sensitive_file",
-                                f"发现可疑文件: {file_path}",
-                                {"url": test_url, "size": len(content)}
-                            )
+                    # 使用关键字列表逐一检查
+                    if any(k in content for k in keywords):
+                        return self._build_result(
+                            "sensitive_file",
+                            f"发现敏感文件: {file_path}",
+                            {"url": test_url, "evidence": content[:200]}
+                        )
         return False, {}
