@@ -26,7 +26,7 @@ class UnauthorizedAccessPlugin(ScannerPlugin):
                 if self._has_keywords(resp1.text, keywords):
                     resp2 = self.safe_request("GET", test_url)
                     if resp2 and self._has_keywords(resp2.text, keywords):
-                        return self._build_result(
+                        return True, self._build_result(
                             "unauthorized_access",
                             f"发现未授权访问路径: {path}",
                             {"url": test_url, "keywords": keywords}

@@ -45,7 +45,7 @@ class SensitiveFilesPlugin(ScannerPlugin):
                     content = resp.text
                     # 使用关键字列表逐一检查
                     if any(k in content for k in keywords):
-                        return self._build_result(
+                        return True, self._build_result(
                             "sensitive_file",
                             f"发现敏感文件: {file_path}",
                             {"url": test_url, "evidence": content[:200]}

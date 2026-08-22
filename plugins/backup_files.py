@@ -31,7 +31,7 @@ class BackupFilesPlugin(ScannerPlugin):
             if resp and resp.status_code == 200:
                 content = resp.text
                 if self._is_source_content(content, resp.headers.get("Content-Type", "")):
-                    return self._build_result(
+                    return True, self._build_result(
                         "backup_file",
                         f"发现备份文件: {test_url}",
                         {"url": test_url, "size": len(resp.content)}
