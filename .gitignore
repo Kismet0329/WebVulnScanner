@@ -8,16 +8,29 @@ __pycache__/
 *.py[cod]
 *.pyo
 
-# 扫描日志和报告
+# 扫描日志和报告（精确匹配，避免误伤 package.json 等）
 *.log
-report.html
-report.json
-*.html
-*.json
+report*.html
+report*.json
+bench_output/
+
+# 敏感配置文件（防止误提交凭据）
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+
+# 备份/交换文件
+*.bak
+*.swp
+*~
 
 # IDE
 .vscode/
 .idea/
 
-# 其他
+# 操作系统
 .DS_Store
+Thumbs.db
