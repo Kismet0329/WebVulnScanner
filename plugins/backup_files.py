@@ -7,12 +7,10 @@ class BackupFilesPlugin(ScannerPlugin):
     name = "backup_files"
     description = "备份文件泄露检测"
     severity = "medium"
+    scope = "url"
 
-    backup_extensions = [
-        '.bak', '.backup', '.old', '.swp', '.save', '.orig', '.tmp',
-        '.zip', '.tar', '.tar.gz', '.tgz', '.rar', '.7z', '.gz',
-        '~', '.pyc', '.class', '.jar', '.war', '.sql', '.dump'
-    ]
+    # 收敛后的核心扩展名：覆盖最常见的备份/编辑器残留类型
+    backup_extensions = ['.bak', '.old', '.orig', '.swp', '~']
     source_patterns = [
         r'<\?php', r'import java', r'package ', r'using System',
         r'CREATE TABLE', r'INSERT INTO', r'class ', r'def ', r'function '
@@ -37,10 +35,17 @@ class BackupFilesPlugin(ScannerPlugin):
         if not filename:
             return False, {}
 
-        # 仅对路径追加备份扩展名，避免破坏查询字符串
+        # 两阶段：先 HEAD 探测存在性（轻量），命中后再 GET 验证内容
         for ext in self.backup_extensions:
             new_path = path + ext
             test_url = urlunparse(parsed._replace(path=new_path))
+
+            # 阶段 1：HEAD 探测，避免下载完整内容
+            head_resp = self.safe_request("HEAD", test_url, timeout=10)
+            if not head_resp or head_resp.status_code != 200:
+                continue
+
+            # 阶段 2：GET 验证内容是否为源码/备份
             resp = self.safe_request("GET", test_url, timeout=10)
             if resp and resp.status_code == 200:
                 content = resp.text

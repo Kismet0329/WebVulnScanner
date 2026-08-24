@@ -6,6 +6,11 @@ class ScannerPlugin:
     name = "base"
     description = "基础插件"
     severity = "low"
+    # 插件作用域：
+    #   "site"  - 整个站点只跑一次（如敏感文件、未授权路径）
+    #   "url"   - 每个爬到的 URL 跑一次（如备份文件）
+    #   "param" - 每个 URL 的每个参数都跑（默认，向后兼容）
+    scope = "param"
 
     SKIP_PARAM_PATTERNS = [
         r'^csrf[_-]?token$',

@@ -3,7 +3,7 @@ import argparse
 DEFAULT_CONFIG = {
     "depth": 2,
     "threads": 10,
-    "rate": 5,
+    "rate": 10,
     "burst": 20,
     "jitter": 0.2,
     "timeout": 10,

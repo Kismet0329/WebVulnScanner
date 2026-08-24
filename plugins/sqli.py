@@ -103,12 +103,12 @@ class SQLiPlugin(ScannerPlugin):
                                 "similarity": round(sim, 4),
                             },
                         )
-        # 时间盲注
-        time_payload = original_value + "' AND SLEEP(5)-- -"
+        # 时间盲注：SLEEP(2) 足以区分网络抖动（通常 <1s），降低单次扫描延迟
+        time_payload = original_value + "' AND SLEEP(2)-- -"
         start = time.time()
-        resp = self._send_payload(url, param, time_payload, method, params, timeout=15)
+        resp = self._send_payload(url, param, time_payload, method, params, timeout=10)
         elapsed = time.time() - start
-        if resp and elapsed > 4.5:
+        if resp and elapsed > 1.8:
             return self._build_result(
                 "time_based_sqli",
                 f"参数 {param} 存在时间盲注（延迟 {elapsed:.2f}s）",

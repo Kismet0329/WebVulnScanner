@@ -9,9 +9,13 @@ class CommandInjectionPlugin(ScannerPlugin):
     description = "检测命令注入漏洞"
     severity = "critical"
 
-    # 跨平台分隔符：Unix 与 Windows 均支持 ; && | || &，
-    # 加上 $(...) 命令替换与 `...` 反引号替换
-    separators = [';', '&&', '|', '||', '&', '\n', '`']
+    # 收敛后的分隔符：覆盖三大类语义
+    #   ;   - 顺序执行（Unix）
+    #   |   - 管道（Unix/Windows）
+    #   &&  - 短路与执行（Unix/Windows）
+    #   &   - 后台执行（Unix/Windows）
+    #   $() - 命令替换（Unix）
+    separators = [';', '|', '&&', '&']
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

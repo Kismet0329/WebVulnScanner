@@ -6,6 +6,7 @@ class SensitiveFilesPlugin(ScannerPlugin):
     name = "sensitive_files"
     description = "常见敏感文件与信息泄露检测"
     severity = "medium"
+    scope = "site"
 
     # 敏感文件路径 -> 内容特征关键字（必须全部出现，避免通用词误报）
     SENSITIVE_FILES = {

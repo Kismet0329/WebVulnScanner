@@ -78,12 +78,52 @@ def main():
         return
 
     results = []
+    # 按 scope 路由提交任务：
+    #   site  - 整个站点只对首个 target 提交一次（结果代表整个站点）
+    #   url   - 每个有 path 的 target 提交一次
+    #   param - 每个 target 都提交（参数测试在插件内部完成）
+    from urllib.parse import urlparse as _urlparse
+    site_plugins = [p for p in plugins if getattr(p, "scope", "param") == "site"]
+    url_plugins = [p for p in plugins if getattr(p, "scope", "param") == "url"]
+    param_plugins = [p for p in plugins if getattr(p, "scope", "param") == "param"]
+
+    submitted_site_plugins = set()
+    # 用于站点级插件的目标：选一个能代表整个站点的 URL（用根 URL）
+    parsed_root = _urlparse(args.url)
+    site_target = {
+        "url": f"{parsed_root.scheme}://{parsed_root.netloc}/",
+        "method": "GET",
+        "params": None,
+    }
+
+    def _has_path(target):
+        p = _urlparse(target["url"]).path
+        return bool(p) and not p.endswith("/")
+
     with ThreadPoolExecutor(max_workers=args.threads) as executor:
         futures = {}
+        # site 级：每个站点级插件仅提交一次
+        for plugin in site_plugins:
+            if plugin.name in submitted_site_plugins:
+                continue
+            submitted_site_plugins.add(plugin.name)
+            future = executor.submit(plugin.check, site_target)
+            futures[future] = (plugin.name, site_target)
+
+        # url 级：每个有 path 的 target 提交一次
         for target in targets:
-            for plugin in plugins:
+            if not _has_path(target):
+                continue
+            for plugin in url_plugins:
                 future = executor.submit(plugin.check, target)
                 futures[future] = (plugin.name, target)
+
+        # param 级：每个 target 都提交
+        for target in targets:
+            for plugin in param_plugins:
+                future = executor.submit(plugin.check, target)
+                futures[future] = (plugin.name, target)
+
         for future in as_completed(futures):
             plugin_name, target = futures[future]
             try:

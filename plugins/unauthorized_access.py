@@ -6,6 +6,7 @@ class UnauthorizedAccessPlugin(ScannerPlugin):
     name = "unauthorized_access"
     description = "检测常见未授权访问路径"
     severity = "high"
+    scope = "site"
 
     SENSITIVE_PATHS = {
         "/admin": ["admin", "login", "dashboard", "后台"],
