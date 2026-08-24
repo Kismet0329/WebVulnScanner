@@ -3,14 +3,20 @@ import string
 from .base import ScannerPlugin
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
+
 class CommandInjectionPlugin(ScannerPlugin):
     name = "command_injection"
     description = "检测命令注入漏洞"
     severity = "critical"
 
+    # 跨平台分隔符：Unix 与 Windows 均支持 ; && | || &，
+    # 加上 $(...) 命令替换与 `...` 反引号替换
+    separators = [';', '&&', '|', '||', '&', '\n', '`']
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.marker = ''.join(random.choices(string.ascii_letters + string.digits, k=8))
+        # uuid4 hex 保证 marker 在响应中唯一可识别，避免与页面已有内容冲突
+        self.marker = ''.join(random.choices(string.ascii_letters + string.digits, k=16))
 
     def check_get(self, url):
         testable = self.get_testable_params(url, method="GET")
@@ -35,33 +41,53 @@ class CommandInjectionPlugin(ScannerPlugin):
         return False, {}
 
     def _test_injection(self, url, param, original_value, method="GET", params=None):
-        separators = [';', '&&', '|', '||', '\n', '`']
-        for sep in separators:
+        for sep in self.separators:
+            # 普通分隔符 + echo
             payload = f"{original_value}{sep}echo {self.marker}"
-            if method == "GET":
-                parsed = urlparse(url)
-                query = parse_qs(parsed.query)
-                query[param] = [payload]
-                test_url = urlunparse(parsed._replace(query=urlencode(query, doseq=True)))
-                resp1 = self.safe_request("GET", test_url)
-                if resp1 and self.marker in resp1.text:
-                    resp2 = self.safe_request("GET", test_url)
-                    if resp2 and self.marker in resp2.text:
-                        return self._build_result(
-                            "command_injection",
-                            f"参数 {param} 存在命令注入，分隔符: {sep}",
-                            {"param": param, "payload": payload, "separator": sep}
-                        )
-            else:
-                test_params = params.copy()
-                test_params[param] = payload
-                resp1 = self.safe_request("POST", url, data=test_params)
-                if resp1 and self.marker in resp1.text:
-                    resp2 = self.safe_request("POST", url, data=test_params)
-                    if resp2 and self.marker in resp2.text:
-                        return self._build_result(
-                            "command_injection",
-                            f"参数 {param} 存在命令注入，分隔符: {sep}",
-                            {"param": param, "payload": payload, "separator": sep}
-                        )
+            result = self._try_payload(url, param, payload, sep, method, params)
+            if result:
+                return result
+        # 命令替换：$(echo marker)
+        payload = f"{original_value}$(echo {self.marker})"
+        result = self._try_payload(url, param, payload, "$()", method, params)
+        if result:
+            return result
+        return None
+
+    def _try_payload(self, url, param, payload, sep_label, method="GET", params=None):
+        if method == "GET":
+            parsed = urlparse(url)
+            query = parse_qs(parsed.query)
+            query[param] = [payload]
+            test_url = urlunparse(parsed._replace(query=urlencode(query, doseq=True)))
+            resp1 = self.safe_request("GET", test_url)
+            if resp1 and self.marker in resp1.text:
+                resp2 = self.safe_request("GET", test_url)
+                if resp2 and self.marker in resp2.text:
+                    return self._build_result(
+                        "command_injection",
+                        f"参数 {param} 存在命令注入，分隔符: {sep_label}",
+                        {
+                            "param": param,
+                            "payload": payload,
+                            "separator": sep_label,
+                            "evidence_url": test_url,
+                        },
+                    )
+        else:
+            test_params = params.copy()
+            test_params[param] = payload
+            resp1 = self.safe_request("POST", url, data=test_params)
+            if resp1 and self.marker in resp1.text:
+                resp2 = self.safe_request("POST", url, data=test_params)
+                if resp2 and self.marker in resp2.text:
+                    return self._build_result(
+                        "command_injection",
+                        f"参数 {param} 存在命令注入，分隔符: {sep_label}",
+                        {
+                            "param": param,
+                            "payload": payload,
+                            "separator": sep_label,
+                        },
+                    )
         return None

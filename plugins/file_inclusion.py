@@ -1,6 +1,7 @@
 from .base import ScannerPlugin
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
+
 class FileInclusionPlugin(ScannerPlugin):
     name = "file_inclusion"
     description = "检测本地文件包含（LFI）漏洞"
@@ -51,7 +52,12 @@ class FileInclusionPlugin(ScannerPlugin):
                         return self._build_result(
                             "local_file_inclusion",
                             f"参数 {param} 存在文件包含，可读取 {file_path}",
-                            {"param": param, "payload": payload}
+                            {
+                                "param": param,
+                                "payload": payload,
+                                "evidence_url": test_url,
+                                "file_content": resp1.text[:300],
+                            },
                         )
             else:
                 test_params = params.copy()
@@ -63,7 +69,11 @@ class FileInclusionPlugin(ScannerPlugin):
                         return self._build_result(
                             "local_file_inclusion",
                             f"参数 {param} 存在文件包含，可读取 {file_path}",
-                            {"param": param, "payload": payload}
+                            {
+                                "param": param,
+                                "payload": payload,
+                                "file_content": resp1.text[:300],
+                            },
                         )
         return None
 

@@ -99,7 +99,15 @@ def main():
     seen = set()
     unique_results = []
     for r in results:
-        key = (r["url"], r["plugin"], r.get("type", ""))
+        # 优先使用证据 URL（如敏感文件自身的 URL）作为去重键，
+        # 否则回退到被扫描页面 URL，避免同一发现被绑定到不同页面 URL 而重复上报
+        evidence = r.get("evidence") or {}
+        if isinstance(evidence, dict):
+            ev_url = evidence.get("url")
+        else:
+            ev_url = None
+        primary_url = ev_url or r.get("url", "")
+        key = (primary_url, r["plugin"], r.get("type", ""))
         if key not in seen:
             seen.add(key)
             unique_results.append(r)

@@ -1,11 +1,11 @@
 import json
-import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse, urlencode
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import logging
 from utils import normalize_url
 from rate_limiter import TokenBucket
+
 
 class Crawler:
     def __init__(self, http_client, rate_limiter, depth=2, max_urls=500, allow_external=False, js_render=False, logger=None):
@@ -21,12 +21,14 @@ class Crawler:
         self._seen_target_keys = set()
         self.start_domain = None
         self.crawl_threads = 5
+        # 复用 Playwright 浏览器实例，避免每个 URL 重启浏览器
+        self._playwright = None
+        self._browser = None
 
     def crawl(self, start_url):
         self.start_domain = urlparse(start_url).netloc
         to_visit = [(start_url, 0)]
         with ThreadPoolExecutor(max_workers=self.crawl_threads) as executor:
-            futures = {}
             while to_visit and len(self.visited) < self.max_urls:
                 batch = []
                 while to_visit and len(batch) < self.crawl_threads * 2:
@@ -36,11 +38,15 @@ class Crawler:
                         self.visited.add(url)
                 if not batch:
                     break
+
+                # 每批次提交后，仅收集本批次的 future，避免 futures 字典无限增长
+                batch_futures = {}
                 for url, depth in batch:
                     future = executor.submit(self._process_url, url, depth)
-                    futures[future] = (url, depth)
-                for future in as_completed(futures):
-                    url, depth = futures[future]
+                    batch_futures[future] = (url, depth)
+
+                for future in as_completed(batch_futures):
+                    url, depth = batch_futures[future]
                     try:
                         new_links = future.result()
                         if new_links:
@@ -49,6 +55,7 @@ class Crawler:
                                     to_visit.append((link, depth + 1))
                     except Exception as e:
                         self.logger.error(f"爬取 {url} 失败: {e}")
+        self._close_browser()
         return self.found_targets
 
     def _process_url(self, url, depth):
@@ -106,23 +113,42 @@ class Crawler:
             self.found_targets.append({"url": url, "method": method, "params": params})
 
     def _render_js(self, url):
+        """使用复用的浏览器实例渲染页面，避免每个 URL 重启浏览器"""
         try:
             from playwright.sync_api import sync_playwright
-            with sync_playwright() as p:
-                browser = p.chromium.launch(headless=True)
-                page = browser.new_page()
-                page.goto(url, timeout=15000)
-                page.wait_for_load_state("networkidle")
-                html = page.content()
-                browser.close()
-                return html
         except ImportError:
             self.logger.warning("未安装playwright，回退到普通请求")
             resp = self.client.get(url)
             return resp.text
+
+        try:
+            if self._playwright is None:
+                self._playwright = sync_playwright().start()
+                self._browser = self._playwright.chromium.launch(headless=True)
+            page = self._browser.new_page()
+            try:
+                page.goto(url, timeout=15000)
+                page.wait_for_load_state("networkidle")
+                return page.content()
+            finally:
+                page.close()
         except Exception as e:
             self.logger.error(f"JS渲染失败 {url}: {e}")
             return ""
+
+    def _close_browser(self):
+        if self._browser is not None:
+            try:
+                self._browser.close()
+            except Exception:
+                pass
+            self._browser = None
+        if self._playwright is not None:
+            try:
+                self._playwright.stop()
+            except Exception:
+                pass
+            self._playwright = None
 
     def _is_valid_url(self, url):
         parsed = urlparse(url)

@@ -35,10 +35,29 @@ class HttpClient:
 
     def login(self, login_url, username, password, username_field="username", password_field="password"):
         try:
-            resp = self.session.get(login_url, timeout=self.timeout)
+            self.session.get(login_url, timeout=self.timeout)
             data = {username_field: username, password_field: password}
             resp = self.session.post(login_url, data=data, timeout=self.timeout, allow_redirects=True)
-            return resp.status_code == 200
+            # 仅凭 200 不能判定登录成功：DVWA 等应用登录失败也返回 200
+            # 通过响应内容里的失败标志 + cookie 变化综合判断
+            if resp.status_code != 200:
+                return False
+            text_lower = resp.text.lower()
+            failure_indicators = [
+                "login failed", "username and/or password incorrect",
+                "incorrect username or password", "登录失败", "用户名或密码错误",
+                "invalid credentials", "wrong password",
+            ]
+            if any(ind in text_lower for ind in failure_indicators):
+                return False
+            # 检查是否设置了登录态 Cookie（如 PHPSESSID 之外的 session/uid/token 等）
+            cookies_keys = {c.name.lower() for c in self.session.cookies}
+            auth_cookie_hints = ("session", "uid", "user", "token", "auth", "login", "uid", "userid")
+            if any(hint in key for key in cookies_keys for hint in auth_cookie_hints):
+                return True
+            # 未发现明确登录态 Cookie，回退到内容判断：响应中含登出/账户信息视为成功
+            success_indicators = ["logout", "welcome", "my account", "logout.php", "退出登录", "欢迎"]
+            return any(ind in text_lower for ind in success_indicators)
         except Exception as e:
             logging.error(f"登录失败: {e}")
             return False
