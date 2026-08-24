@@ -1,4 +1,3 @@
-import sys
 import logging
 from config import parse_args, DEFAULT_CONFIG
 from http_client import HttpClient
@@ -18,6 +17,10 @@ def setup_logging(log_file="scanner.log"):
             logging.StreamHandler()
         ]
     )
+    # 降噪：urllib3 重试/连接日志降到 WARNING，避免 INFO 级别刷屏
+    logging.getLogger("urllib3").setLevel(logging.WARNING)
+    logging.getLogger("urllib3.connectionpool").setLevel(logging.WARNING)
+    logging.getLogger("requests").setLevel(logging.WARNING)
     return logging.getLogger("WebVulnScanner")
 
 def main():
@@ -47,6 +50,10 @@ def main():
         if not client.login(args.login_url, args.username, args.password,
                             args.username_field, args.password_field):
             logger.warning("登录可能失败，继续扫描...")
+        else:
+            logger.info(f"登录成功: {args.login_url}")
+            cookie_names = [c.name for c in client.session.cookies]
+            logger.info(f"登录后 cookies: {cookie_names}")
 
     rate_limiter = TokenBucket(rate=args.rate, capacity=args.burst, jitter=args.jitter)
 
@@ -72,10 +79,34 @@ def main():
     )
     targets = crawler.crawl(args.url)
     logger.info(f"爬取完成，待扫描目标数量: {len(targets)}")
-
     if not targets:
         logger.warning("没有发现可扫描的URL，退出。")
         return
+
+    # 检测目标是否可能需要登录：
+    # 1) 爬到的 URL 中 login/signup/register 比例过高
+    # 2) 缺少常见的"业务"路径段（如 user/admin/api/v1/product/order 等）
+    # 提示用户使用 --login-url，避免静默漏扫
+    from urllib.parse import urlparse as _up
+    auth_keywords = ("login", "signin", "signup", "register", "auth")
+    biz_keywords = ("user", "admin", "api", "v1", "product", "order", "profile",
+                    "account", "dashboard", "manage", "console", "portal")
+    auth_count = 0
+    biz_count = 0
+    for t in targets:
+        p = _up(t["url"]).path.lower()
+        if any(k in p for k in auth_keywords):
+            auth_count += 1
+        if any(k in p for k in biz_keywords):
+            biz_count += 1
+    total_t = len(targets)
+    auth_ratio = auth_count / total_t
+    if not args.login_url and (auth_ratio > 0.3 or biz_count == 0):
+        logger.warning(
+            f"检测到登录页占比 {auth_ratio:.0%}，业务路径 {biz_count} 个；"
+            "目标可能需要登录，未登录将漏扫受保护页面。"
+            "建议加 --login-url/--username/--password 参数。"
+        )
 
     results = []
     # 按 scope 路由提交任务：
@@ -134,7 +165,7 @@ def main():
                     results.append(result)
                     logger.warning(f"发现漏洞: {plugin_name} - {target['url']} ({result['severity']})")
             except Exception as e:
-                logger.error(f"插件 {plugin_name} 在 {target['url']} 出错: {e}")
+                logger.error(f"插件 {plugin_name} 在 {target['url']} 出错: {e}", exc_info=True)
 
     seen = set()
     unique_results = []

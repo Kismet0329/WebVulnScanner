@@ -13,16 +13,60 @@ class ScannerPlugin:
     scope = "param"
 
     SKIP_PARAM_PATTERNS = [
+        # CSRF / 一次性 token
         r'^csrf[_-]?token$',
+        r'^token$',
+        r'^authenticity_token$',
+        r'^_wpnonce$',
+        r'^user_token$',           # DVWA
+        r'^anticsrf$',
+        r'^__requestverificationtoken$',
+        r'^csrfmiddlewaretoken$',
+        # 时间戳/签名/防重放
         r'^timestamp$',
         r'^sign$',
         r'^signature$',
         r'^nonce$',
-        r'^verification_code$',
+        r'^nonce_str$',
+        r'^verify$',
+        # 验证码
         r'^captcha$',
-        r'^token$',
-        r'^authenticity_token$',
-        r'^_wpnonce$',
+        r'^verification_code$',
+        r'^vcode$',
+        r'^img_code$',
+        # 密码类字段（非注入点）
+        r'^password$',
+        r'^passwd$',
+        r'^pwd$',
+        r'^password_conf$',
+        r'^password_confirmation$',
+        r'^confirm_password$',
+        r'^old_password$',
+        r'^new_password$',
+        r'^current_password$',
+        # 表单按钮/控制字段
+        r'^submit$',
+        r'^btnsubmit$',
+        r'^submitbtn$',
+        r'^action$',
+        r'^operation$',
+        r'^form_id$',
+        r'^form_build_id$',
+        # 文件上传字段名本身（其值是文件，非 SQL/反射上下文）
+        r'^uploaded$',
+        r'^file$',
+        r'^upload$',
+        r'^attachment$',
+        r'^image$',
+        r'^avatar$',
+        # 视图状态
+        r'^__viewstate$',
+        r'^_viewstate$',
+        r'^eventtarget$',
+        r'^eventargument$',
+        # 框架特定
+        r'^yii[_-]?csrf$',
+        r'^_csrf$',
     ]
 
     def __init__(self, http_client, rate_limiter=None, logger=None,
@@ -82,11 +126,19 @@ class ScannerPlugin:
                         testable[param] = value
         return testable
 
-    def _build_result(self, vuln_type, detail, evidence=None, severity=None):
+    def _build_result(self, vuln_type, detail, evidence=None, severity=None, confidence="high"):
+        """构造漏洞结果
+
+        confidence: 漏洞可信度
+            "high"   - 强证据：如报错注入匹配到真实 SQL 错误、LFI 读到完整文件内容
+            "medium" - 中等证据：如布尔盲注相似度差异、XSS 在可执行上下文中回显
+            "low"    - 弱证据：如时间盲注仅略超阈值，需人工复核
+        """
         return {
             "plugin": self.name,
             "type": vuln_type,
             "severity": severity or self.severity,
+            "confidence": confidence,
             "detail": detail,
             "evidence": evidence or {},
         }
