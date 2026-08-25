@@ -61,6 +61,15 @@ class TestUtils(unittest.TestCase):
         self.assertIn("a=1", u)
         self.assertIn("b=2", u)
 
+    def test_normalize_strips_fragment(self):
+        from utils import strip_url_fragment
+        u = normalize_url("http://127.0.0.1:42001/vulnerabilities/captcha/#")
+        self.assertNotIn("#", u)
+        self.assertEqual(
+            strip_url_fragment("http://t/vulnerabilities/captcha/#"),
+            "http://t/vulnerabilities/captcha/",
+        )
+
     def test_similarity(self):
         self.assertGreater(response_similarity("hello world", "hello world"), 0.99)
         self.assertLess(response_similarity("aaa", "zzz"), 0.5)
@@ -99,6 +108,15 @@ class TestCrawlerLoginDetection(unittest.TestCase):
         self.assertFalse(
             c._response_is_login_page(r, "http://t/login.php")
         )
+
+    def test_skip_captcha_path(self):
+        from crawler import Crawler
+        from rate_limiter import TokenBucket
+
+        c = Crawler(object(), TokenBucket(10, 10), logger=None)
+        self.assertTrue(c._is_skip_path("http://127.0.0.1:42001/vulnerabilities/captcha/"))
+        self.assertTrue(c._is_skip_path("http://127.0.0.1:42001/vulnerabilities/captcha/#"))
+        self.assertFalse(c._is_skip_path("http://127.0.0.1:42001/vulnerabilities/sqli/"))
 
 
 if __name__ == "__main__":

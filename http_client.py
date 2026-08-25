@@ -1,11 +1,15 @@
 import logging
 import re
 import threading
+from urllib.parse import urlparse
 
 import requests
 import urllib3
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+from requests.exceptions import ReadTimeout, ConnectTimeout, Timeout
+
+from utils import strip_url_fragment
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -28,6 +32,10 @@ class HttpClient:
         self.timeout = timeout
         # requests.Session / CookieJar 非线程安全；多线程扫描必须串行化会话访问
         self._lock = threading.RLock()
+        # 连续超时熔断：同一 path 超时过多次后跳过，避免 captcha 等挂死页刷屏
+        self._timeout_counts = {}
+        self._timeout_skip = set()
+        self.max_timeouts_per_path = 2
         self.session.headers.update({
             "User-Agent": user_agent or "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -184,11 +192,41 @@ class HttpClient:
             logging.error(f"登录失败: {e}")
             return False
 
+    def _path_key(self, url):
+        p = urlparse(url)
+        return f"{p.scheme}://{p.netloc}{p.path}"
+
+    def is_path_skipped(self, url):
+        return self._path_key(strip_url_fragment(url)) in self._timeout_skip
+
     def request(self, method, url, **kwargs):
+        url = strip_url_fragment(url)
+        path_key = self._path_key(url)
+        if path_key in self._timeout_skip:
+            raise ReadTimeout(
+                f"skipped: path timed out {self.max_timeouts_per_path}+ times ({path_key})"
+            )
         kwargs.setdefault("timeout", self.timeout)
         kwargs.setdefault("verify", self.session.verify)
-        with self._lock:
-            return self.session.request(method, url, **kwargs)
+        try:
+            with self._lock:
+                resp = self.session.request(method, url, **kwargs)
+            with self._lock:
+                self._timeout_counts.pop(path_key, None)
+            return resp
+        except (ReadTimeout, ConnectTimeout, Timeout):
+            with self._lock:
+                count = self._timeout_counts.get(path_key, 0) + 1
+                self._timeout_counts[path_key] = count
+                should_warn = count >= self.max_timeouts_per_path
+                if should_warn:
+                    self._timeout_skip.add(path_key)
+            if should_warn:
+                logging.warning(
+                    f"路径连续超时 {count} 次，后续跳过: {path_key} "
+                    f"（常见于 DVWA captcha 等会挂起的页面）"
+                )
+            raise
 
     def get(self, url, **kwargs):
         return self.request("GET", url, **kwargs)

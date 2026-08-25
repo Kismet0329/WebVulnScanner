@@ -46,9 +46,13 @@ class Crawler:
                 batch = []
                 while to_visit and len(batch) < self.crawl_threads * 2:
                     url, depth = to_visit.pop(0)
+                    url = normalize_url(url)
                     # 跳过注销类 URL，避免销毁会话
                     if self._is_logout_url(url):
                         self.logger.info(f"跳过注销类 URL: {url}")
+                        continue
+                    if self._is_skip_path(url):
+                        self.logger.info(f"跳过易挂起/低价值路径: {url}")
                         continue
                     # 加锁检查 visited，避免重复提交
                     with self._lock:
@@ -126,9 +130,23 @@ class Crawler:
         "/session/destroy", "/session/end",
     )
 
+    # 已知易挂起/无注入价值的路径（DVWA captcha 会请求外部 reCAPTCHA 导致 read timeout）
+    SKIP_PATH_PATTERNS = (
+        "/vulnerabilities/captcha",
+        "/captcha",
+        "/recaptcha",
+    )
+
     def _is_logout_url(self, url):
         path = urlparse(url).path.lower()
         return any(pat in path for pat in self.LOGOUT_PATTERNS)
+
+    def _is_skip_path(self, url):
+        path = urlparse(url).path.lower().rstrip("/")
+        return any(
+            path == pat.rstrip("/") or path.startswith(pat.rstrip("/") + "/")
+            for pat in self.SKIP_PATH_PATTERNS
+        )
 
     LOGIN_PATH_KEYWORDS = ("login", "signin", "sign-in", "sign_in", "auth/login")
     LOGIN_BODY_MARKERS = (
@@ -163,15 +181,17 @@ class Crawler:
         return has_password_field and has_user_field
 
     def _process_url(self, url, depth):
-        # 跳过注销类 URL，避免在爬取过程中销毁会话
+        url = normalize_url(url)
         if self._is_logout_url(url):
             self.logger.info(f"跳过注销类 URL: {url}")
+            return []
+        if self._is_skip_path(url):
+            self.logger.info(f"跳过易挂起/低价值路径: {url}")
             return []
         try:
             self.rate_limiter.acquire()
             if self.js_render:
                 html = self._render_js(url)
-                # JS 渲染无 Response 对象，用内容启发式判断
                 class _Fake:
                     pass
                 fake = _Fake()
@@ -204,20 +224,33 @@ class Crawler:
         soup = BeautifulSoup(html, "lxml")
         new_links = set()
         for a in soup.find_all("a", href=True):
-            href = a["href"]
-            full_url = urljoin(url, href)
-            if self._is_valid_url(full_url) and not self._is_logout_url(full_url):
-                new_links.add(normalize_url(full_url))
+            href = (a.get("href") or "").strip()
+            if not href or href.startswith("#") or href.lower().startswith("javascript:"):
+                continue
+            full_url = normalize_url(urljoin(url, href))
+            if (
+                self._is_valid_url(full_url)
+                and not self._is_logout_url(full_url)
+                and not self._is_skip_path(full_url)
+            ):
+                new_links.add(full_url)
         for form in soup.find_all("form"):
             action = form.get("action", "")
             method = form.get("method", "get").lower()
             if method not in ("get", "post"):
                 method = "get"
-            full_action = urljoin(url, action) if action else url
-            # 不把登录/注销表单当作注入测试目标
-            if self._is_login_url(full_action) or self._is_logout_url(full_action):
-                if self._is_valid_url(full_action) and not self._is_logout_url(full_action):
-                    new_links.add(normalize_url(full_action))
+            full_action = normalize_url(urljoin(url, action) if action else url)
+            if (
+                self._is_login_url(full_action)
+                or self._is_logout_url(full_action)
+                or self._is_skip_path(full_action)
+            ):
+                if (
+                    self._is_valid_url(full_action)
+                    and not self._is_logout_url(full_action)
+                    and not self._is_skip_path(full_action)
+                ):
+                    new_links.add(full_action)
                 continue
             inputs = form.find_all(["input", "textarea", "select"])
             params = {}
@@ -226,28 +259,35 @@ class Crawler:
                 if name:
                     params[name] = inp.get("value", "")
             if method == "get":
-                # GET 表单：把带参数的 URL 作为 target，让参数级插件能测到
                 if params:
-                    full_url_with_params = full_action + "?" + urlencode(params)
+                    full_url_with_params = normalize_url(full_action + "?" + urlencode(params))
                     if self._is_valid_url(full_url_with_params):
                         self._add_target(full_url_with_params, "GET", None)
-                        new_links.add(normalize_url(full_url_with_params))
+                        new_links.add(full_url_with_params)
                 else:
                     if self._is_valid_url(full_action):
-                        new_links.add(normalize_url(full_action))
+                        new_links.add(full_action)
             else:
                 self._add_target(full_action, "POST", params)
                 if self._is_valid_url(full_action):
-                    new_links.add(normalize_url(full_action))
+                    new_links.add(full_action)
         for iframe in soup.find_all("iframe", src=True):
-            full_url = urljoin(url, iframe["src"])
-            if self._is_valid_url(full_url) and not self._is_logout_url(full_url):
-                new_links.add(normalize_url(full_url))
+            src = (iframe.get("src") or "").strip()
+            if not src or src.startswith("#"):
+                continue
+            full_url = normalize_url(urljoin(url, src))
+            if (
+                self._is_valid_url(full_url)
+                and not self._is_logout_url(full_url)
+                and not self._is_skip_path(full_url)
+            ):
+                new_links.add(full_url)
         return list(new_links)
 
     def _add_target(self, url, method, params):
-        # 加锁：多线程下 _seen_target_keys 检查+添加必须是原子的
-        # 否则两个线程可能同时通过检查，导致 target 重复或丢失
+        url = normalize_url(url)
+        if self._is_skip_path(url) or self._is_logout_url(url):
+            return
         params_str = json.dumps(params, sort_keys=True) if params else ""
         key = (method, url, params_str)
         with self._lock:

@@ -1,4 +1,4 @@
-﻿import sys
+import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 """调试：直接构造 form HTML 看 crawler 如何解析"""

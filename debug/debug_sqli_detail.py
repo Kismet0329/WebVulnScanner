@@ -1,4 +1,4 @@
-﻿import sys
+import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 """调试：scanner 跑完后再用插件直接测一次"""

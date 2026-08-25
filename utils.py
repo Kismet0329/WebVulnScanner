@@ -5,6 +5,7 @@ import re
 from bs4 import BeautifulSoup
 
 def normalize_url(url):
+    """规范化 URL：小写 host、排序 query、去掉 fragment（#...）。"""
     parsed = urlparse(url)
     scheme = parsed.scheme.lower()
     netloc = parsed.netloc.lower()
@@ -12,12 +13,22 @@ def normalize_url(url):
         netloc = netloc[:-3]
     elif netloc.endswith(':443') and scheme == 'https':
         netloc = netloc[:-4]
-    path = parsed.path
+    path = parsed.path or "/"
+    if path.endswith("/#"):
+        path = path[:-1]
     query = parsed.query
     if query:
         params = sorted(parse_qsl(query, keep_blank_values=True))
         query = urlencode(params)
-    return urlunparse((scheme, netloc, path, parsed.params, query, ''))
+    # fragment 一律丢弃：浏览器不会发给服务器，带 # 只会干扰去重/日志
+    return urlunparse((scheme, netloc, path, parsed.params, query, ""))
+
+
+def strip_url_fragment(url):
+    """仅去掉 fragment，保留其余部分（请求前调用）。"""
+    if not url or "#" not in url:
+        return url
+    return url.split("#", 1)[0]
 
 def is_same_domain(url1, url2):
     p1 = urlparse(url1)

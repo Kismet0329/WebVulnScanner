@@ -80,6 +80,9 @@ class ScannerPlugin:
             self.skip_param_patterns.extend(skip_params)
 
     def safe_request(self, method, url, **kwargs):
+        if hasattr(self.client, "is_path_skipped") and self.client.is_path_skipped(url):
+            self.logger.debug(f"跳过已熔断路径: {url}")
+            return None
         if self.rate_limiter:
             self.rate_limiter.acquire()
         if self.fixed_delay > 0:
@@ -88,7 +91,11 @@ class ScannerPlugin:
             response = self.client.request(method, url, **kwargs)
             return response
         except Exception as e:
-            self.logger.error(f"请求异常 {url}: {e}")
+            msg = str(e)
+            if "skipped:" in msg or "timed out" in msg.lower() or "Read timed out" in msg:
+                self.logger.warning(f"请求超时/跳过 {url}: {e}")
+            else:
+                self.logger.error(f"请求异常 {url}: {e}")
             return None
 
     def check(self, target):
