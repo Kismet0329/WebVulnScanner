@@ -23,6 +23,62 @@ def setup_logging(log_file="scanner.log"):
     logging.getLogger("requests").setLevel(logging.WARNING)
     return logging.getLogger("WebVulnScanner")
 
+def _probe_session(url, args, client, logger):
+    """会话有效性预检。
+
+    探测目标 URL，判断当前 cookie/登录态是否真正生效。
+    若被重定向到登录页或返回登录表单，说明会话失效，
+    此时所有受保护页面的 param 级插件都会漏报，必须明确警告。
+    """
+    # 打印当前生效的 cookies，便于用户排查
+    active_cookies = {c.name: c.value for c in client.session.cookies}
+    if active_cookies:
+        # 只显示名称和值的前 16 位，避免泄露完整凭据到日志
+        cookie_summary = {k: (v[:16] + "...") if len(v) > 16 else v for k, v in active_cookies.items()}
+        logger.info(f"当前生效 cookies: {cookie_summary}")
+    else:
+        logger.warning("当前无任何 cookie，若目标需要登录将漏扫受保护页面")
+
+    try:
+        resp = client.get(url, allow_redirects=False)
+    except Exception as e:
+        logger.warning(f"会话预检请求失败: {e}")
+        return
+
+    if resp is None:
+        logger.warning("会话预检：服务器无响应")
+        return
+
+    location = resp.headers.get("Location", "")
+    body_lower = resp.text[:2000].lower() if resp.text else ""
+
+    # 登录页特征：重定向到 login.php / 包含登录表单
+    is_login_redirect = (
+        resp.status_code in (301, 302, 303, 307, 308)
+        and any(kw in location.lower() for kw in ("login", "signin", "auth", "account/login"))
+    )
+    is_login_form = any(
+        kw in body_lower for kw in ("user_token", 'name="username"', 'name="password"',
+                                     "please enter your credentials", "用户登录", "登录")
+    )
+
+    if is_login_redirect:
+        logger.error(
+            f"会话预检失败：访问 {url} 被重定向到 {location}。"
+            "当前 cookie/登录态已失效，受保护页面全部漏报。"
+            "请重新获取有效 cookie（浏览器刷新目标页面后从 DevTools 复制），"
+            "或改用 --login-url/--username/--password 自动登录。"
+        )
+    elif is_login_form and not args.login_url:
+        logger.error(
+            f"会话预检失败：访问 {url} 返回登录表单。"
+            "当前 cookie 已失效或未提供，受保护页面全部漏报。"
+            "请重新获取有效 cookie 或使用 --login-url 参数。"
+        )
+    else:
+        logger.info(f"会话预检通过：访问 {url} 返回 {resp.status_code}（长度 {len(resp.text)}）")
+
+
 def main():
     args = parse_args()
     logger = setup_logging()
@@ -54,6 +110,12 @@ def main():
             logger.info(f"登录成功: {args.login_url}")
             cookie_names = [c.name for c in client.session.cookies]
             logger.info(f"登录后 cookies: {cookie_names}")
+
+    # 会话有效性预检：探测目标首页，判断是否被重定向到登录页。
+    # 这是导致"只扫到1个漏洞"的最常见根因：cookie 失效/格式错误 →
+    # 所有受保护页面返回 302 到 login.php → param 级插件全部漏报，
+    # 仅站点级插件（robots.txt 等）能命中。
+    _probe_session(args.url, args, client, logger)
 
     rate_limiter = TokenBucket(rate=args.rate, capacity=args.burst, jitter=args.jitter)
 

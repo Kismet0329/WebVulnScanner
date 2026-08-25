@@ -46,6 +46,10 @@ class Crawler:
                 batch = []
                 while to_visit and len(batch) < self.crawl_threads * 2:
                     url, depth = to_visit.pop(0)
+                    # 跳过注销类 URL，避免销毁会话
+                    if self._is_logout_url(url):
+                        self.logger.info(f"跳过注销类 URL: {url}")
+                        continue
                     # 加锁检查 visited，避免重复提交
                     with self._lock:
                         if url in self.visited or depth > self.depth:
@@ -112,7 +116,25 @@ class Crawler:
             self.logger.debug(f"获取 robots.txt 失败: {e}")
         return paths
 
+    # 注销/退出类 URL 模式：爬虫绝对不能访问，否则会销毁当前会话
+    # 导致后续所有受保护页面返回 302 到登录页 → param 级插件全部漏报
+    # 真实挖 src 时同理：误访问 /logout /signout /exit 会断开会话
+    LOGOUT_PATTERNS = (
+        "/logout", "/signout", "/sign-out", "/sign_off", "/signoff",
+        "/exit", "/deauth", "/logoff", "/log-off", "/quit",
+        "/account/logout", "/user/logout", "/auth/logout",
+        "/session/destroy", "/session/end",
+    )
+
+    def _is_logout_url(self, url):
+        path = urlparse(url).path.lower()
+        return any(pat in path for pat in self.LOGOUT_PATTERNS)
+
     def _process_url(self, url, depth):
+        # 跳过注销类 URL，避免在爬取过程中销毁会话
+        if self._is_logout_url(url):
+            self.logger.info(f"跳过注销类 URL: {url}")
+            return []
         try:
             self.rate_limiter.acquire()
             if self.js_render:
