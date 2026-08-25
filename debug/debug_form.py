@@ -1,3 +1,6 @@
+﻿import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 """调试：直接构造 form HTML 看 crawler 如何解析"""
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlencode
@@ -24,3 +27,4 @@ for form in soup.find_all("form"):
     if method == "get" and params:
         full_url_with_params = full_action + "?" + urlencode(params)
         print(f"  -> {full_url_with_params}")
+

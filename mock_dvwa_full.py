@@ -286,7 +286,7 @@ def main():
     httpd.daemon_threads = True
     print(f"[*] Mock DVWA 监听 http://127.0.0.1:{args.port}/login.php")
     print(f"[*] 凭据: admin / password")
-    print(f"[*] --cookie 自测: PHPSESSID={next(iter(WELL_KNOWN_SESSIONS))}; Security=low")
+    print(f"[*] --cookie 自测: PHPSESSID={next(iter(WELL_KNOWN_SESSIONS))}; security=low")
     print(f"[*] 漏洞页面:")
     print(f"    /vulnerabilities/sqli/?id=1'         报错注入")
     print(f"    /vulnerabilities/sqli_blind/?id=1'    时间盲注")

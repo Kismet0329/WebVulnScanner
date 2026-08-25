@@ -1,3 +1,6 @@
+﻿import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 """Mock DVWA 登录流程测试
 
 模拟 DVWA 的真实登录流程：
@@ -174,3 +177,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

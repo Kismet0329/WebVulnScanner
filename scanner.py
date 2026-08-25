@@ -1,27 +1,29 @@
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from urllib.parse import urlparse as _urlparse
+
 from config import parse_args, DEFAULT_CONFIG
 from http_client import HttpClient
 from rate_limiter import TokenBucket
 from crawler import Crawler
 from plugin_loader import load_plugins
 from reporter import generate_html_report, generate_json_report
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from utils import normalize_url
+
 
 def setup_logging(log_file="scanner.log"):
     logging.basicConfig(
         level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         handlers=[
-            logging.FileHandler(log_file, encoding='utf-8'),
-            logging.StreamHandler()
-        ]
+            logging.FileHandler(log_file, encoding="utf-8"),
+            logging.StreamHandler(),
+        ],
     )
-    # 降噪：urllib3 重试/连接日志降到 WARNING，避免 INFO 级别刷屏
     logging.getLogger("urllib3").setLevel(logging.WARNING)
     logging.getLogger("urllib3.connectionpool").setLevel(logging.WARNING)
     logging.getLogger("requests").setLevel(logging.WARNING)
     return logging.getLogger("WebVulnScanner")
+
 
 def _probe_session(url, args, client, logger):
     """会话有效性预检。
@@ -30,11 +32,11 @@ def _probe_session(url, args, client, logger):
     若被重定向到登录页或返回登录表单，说明会话失效，
     此时所有受保护页面的 param 级插件都会漏报，必须明确警告。
     """
-    # 打印当前生效的 cookies，便于用户排查
     active_cookies = {c.name: c.value for c in client.session.cookies}
     if active_cookies:
-        # 只显示名称和值的前 16 位，避免泄露完整凭据到日志
-        cookie_summary = {k: (v[:16] + "...") if len(v) > 16 else v for k, v in active_cookies.items()}
+        cookie_summary = {
+            k: (v[:16] + "...") if len(v) > 16 else v for k, v in active_cookies.items()
+        }
         logger.info(f"当前生效 cookies: {cookie_summary}")
     else:
         logger.warning("当前无任何 cookie，若目标需要登录将漏扫受保护页面")
@@ -43,23 +45,29 @@ def _probe_session(url, args, client, logger):
         resp = client.get(url, allow_redirects=False)
     except Exception as e:
         logger.warning(f"会话预检请求失败: {e}")
-        return
+        return False
 
     if resp is None:
         logger.warning("会话预检：服务器无响应")
-        return
+        return False
 
     location = resp.headers.get("Location", "")
     body_lower = resp.text[:2000].lower() if resp.text else ""
 
-    # 登录页特征：重定向到 login.php / 包含登录表单
     is_login_redirect = (
         resp.status_code in (301, 302, 303, 307, 308)
         and any(kw in location.lower() for kw in ("login", "signin", "auth", "account/login"))
     )
     is_login_form = any(
-        kw in body_lower for kw in ("user_token", 'name="username"', 'name="password"',
-                                     "please enter your credentials", "用户登录", "登录")
+        kw in body_lower
+        for kw in (
+            "user_token",
+            'name="username"',
+            'name="password"',
+            "please enter your credentials",
+            "用户登录",
+            "登录",
+        )
     )
 
     if is_login_redirect:
@@ -68,15 +76,31 @@ def _probe_session(url, args, client, logger):
             "当前 cookie/登录态已失效，受保护页面全部漏报。"
             "请重新获取有效 cookie（浏览器刷新目标页面后从 DevTools 复制），"
             "或改用 --login-url/--username/--password 自动登录。"
+            "注意 DVWA 必须带小写 security=low（不是 Security=low）。"
         )
-    elif is_login_form and not args.login_url:
+        return False
+    if is_login_form and not args.login_url:
         logger.error(
             f"会话预检失败：访问 {url} 返回登录表单。"
             "当前 cookie 已失效或未提供，受保护页面全部漏报。"
             "请重新获取有效 cookie 或使用 --login-url 参数。"
         )
-    else:
-        logger.info(f"会话预检通过：访问 {url} 返回 {resp.status_code}（长度 {len(resp.text)}）")
+        return False
+
+    logger.info(f"会话预检通过：访问 {url} 返回 {resp.status_code}（长度 {len(resp.text)}）")
+    return True
+
+
+def _count_param_targets(targets):
+    """统计带可测参数的目标数量（GET query 或 POST body）。"""
+    n = 0
+    for t in targets:
+        if t.get("method") == "POST" and t.get("params"):
+            n += 1
+            continue
+        if t.get("method") == "GET" and _urlparse(t.get("url", "")).query:
+            n += 1
+    return n
 
 
 def main():
@@ -87,108 +111,75 @@ def main():
         plugin_classes = load_plugins()
         print("可用插件:")
         for cls in plugin_classes:
-            print(f"- {cls.name}: {cls.description} (severity: {cls.severity})")
+            scope = getattr(cls, "scope", "param")
+            print(f"- {cls.name}: {cls.description} (severity: {cls.severity}, scope: {scope})")
         return
 
-    only_plugins = args.only_plugins.split(',') if args.only_plugins else None
-    exclude_plugins = args.exclude_plugins.split(',') if args.exclude_plugins else None
+    only_plugins = args.only_plugins.split(",") if args.only_plugins else None
+    exclude_plugins = args.exclude_plugins.split(",") if args.exclude_plugins else None
 
     client = HttpClient(
         proxy=args.proxy,
         timeout=args.timeout,
-        verify_ssl=DEFAULT_CONFIG["verify_ssl"],
+        verify_ssl=args.verify_ssl,
         user_agent=DEFAULT_CONFIG["user_agent"],
         headers=args.header,
-        cookies=args.cookie
+        cookies=args.cookie,
     )
 
+    # DVWA：纠正 Security→security，并设置安全等级。
+    # 这是「会话有效却只扫到 1 个漏洞（robots.txt）」的最常见根因之一。
+    if args.security_level and args.security_level != "none":
+        client.ensure_dvwa_security(args.security_level)
+
     if args.login_url:
-        if not client.login(args.login_url, args.username, args.password,
-                            args.username_field, args.password_field):
+        if not client.login(
+            args.login_url,
+            args.username,
+            args.password,
+            args.username_field,
+            args.password_field,
+        ):
             logger.warning("登录可能失败，继续扫描...")
         else:
             logger.info(f"登录成功: {args.login_url}")
             cookie_names = [c.name for c in client.session.cookies]
             logger.info(f"登录后 cookies: {cookie_names}")
+            if args.security_level and args.security_level != "none":
+                client.ensure_dvwa_security(args.security_level)
 
-    # 会话有效性预检：探测目标首页，判断是否被重定向到登录页。
-    # 这是导致"只扫到1个漏洞"的最常见根因：cookie 失效/格式错误 →
-    # 所有受保护页面返回 302 到 login.php → param 级插件全部漏报，
-    # 仅站点级插件（robots.txt 等）能命中。
-    _probe_session(args.url, args, client, logger)
+    session_ok = _probe_session(args.url, args, client, logger)
 
     rate_limiter = TokenBucket(rate=args.rate, capacity=args.burst, jitter=args.jitter)
 
     plugin_classes = load_plugins(only=only_plugins, exclude=exclude_plugins)
     plugins = []
     for cls in plugin_classes:
-        plugins.append(cls(
-            http_client=client,
-            rate_limiter=rate_limiter,
-            logger=logger,
-            skip_params=args.skip_params,
-            fixed_delay=args.fixed_delay
-        ))
+        plugins.append(
+            cls(
+                http_client=client,
+                rate_limiter=rate_limiter,
+                logger=logger,
+                skip_params=args.skip_params,
+                fixed_delay=args.fixed_delay,
+            )
+        )
     logger.info(f"已加载插件: {[p.name for p in plugins]}")
 
     crawler = Crawler(
-        client, rate_limiter,
+        client,
+        rate_limiter,
         depth=args.depth,
         max_urls=args.max_urls,
         allow_external=args.allow_external,
         js_render=args.js_render,
-        logger=logger
+        logger=logger,
     )
     targets = crawler.crawl(args.url)
     logger.info(f"爬取完成，待扫描目标数量: {len(targets)}")
-    if not targets:
-        logger.warning("没有发现可扫描的URL，退出。")
-        return
-
-    # 检测目标是否可能需要登录：
-    # 1) 爬到的 URL 中 login/signup/register 比例过高
-    # 2) 缺少常见的"业务"路径段（如 user/admin/api/v1/product/order 等）
-    # 提示用户使用 --login-url，避免静默漏扫
-    from urllib.parse import urlparse as _up
-    auth_keywords = ("login", "signin", "signup", "register", "auth")
-    biz_keywords = ("user", "admin", "api", "v1", "product", "order", "profile",
-                    "account", "dashboard", "manage", "console", "portal")
-    auth_count = 0
-    biz_count = 0
     for t in targets:
-        p = _up(t["url"]).path.lower()
-        if any(k in p for k in auth_keywords):
-            auth_count += 1
-        if any(k in p for k in biz_keywords):
-            biz_count += 1
-    total_t = len(targets)
-    auth_ratio = auth_count / total_t
-    # 用户已提供 cookie 或登录 URL 时跳过登录提示：用户已明确处理了认证
-    has_auth = bool(args.login_url) or bool(args.cookie)
-    if not has_auth and (auth_ratio > 0.3 or biz_count == 0):
-        logger.warning(
-            f"检测到登录页占比 {auth_ratio:.0%}，业务路径 {biz_count} 个；"
-            "目标可能需要登录，未登录将漏扫受保护页面。"
-            "建议加 --login-url/--username/--password 或 --cookie 参数。"
-        )
-    elif has_auth and auth_ratio > 0.3:
-        logger.info(
-            f"登录页占比 {auth_ratio:.0%}，已提供认证凭据；"
-            "若仍漏扫受保护页面，请检查 --cookie 值或登录凭据是否正确。"
-        )
+        logger.debug(f"TARGET: [{t['method']}] {t['url']} params={t.get('params')}")
 
-    results = []
-    # 按 scope 路由提交任务：
-    #   site  - 整个站点只对首个 target 提交一次（结果代表整个站点）
-    #   url   - 每个有 path 的 target 提交一次
-    #   param - 每个 target 都提交（参数测试在插件内部完成）
-    from urllib.parse import urlparse as _urlparse
-    site_plugins = [p for p in plugins if getattr(p, "scope", "param") == "site"]
-    url_plugins = [p for p in plugins if getattr(p, "scope", "param") == "url"]
-    param_plugins = [p for p in plugins if getattr(p, "scope", "param") == "param"]
-
-    submitted_site_plugins = set()
-    # 用于站点级插件的目标：选一个能代表整个站点的 URL（用根 URL）
     parsed_root = _urlparse(args.url)
     site_target = {
         "url": f"{parsed_root.scheme}://{parsed_root.netloc}/",
@@ -196,13 +187,70 @@ def main():
         "params": None,
     }
 
+    # 会话失效时爬虫会跳过所有登录重定向页，targets 可能为空；
+    # 仍继续跑站点级插件（robots.txt 等不依赖登录），避免“无报告可看”。
+    if not targets:
+        logger.warning(
+            "没有发现可扫描的业务 URL（常见于登录态失效）。"
+            "将仅运行站点级插件。"
+        )
+        if not session_ok:
+            logger.error("会话预检未通过，请先修复登录态后再扫描受保护页面。")
+
+    auth_keywords = ("login", "signin", "signup", "register", "auth")
+    biz_keywords = (
+        "user", "admin", "api", "v1", "product", "order", "profile",
+        "account", "dashboard", "manage", "console", "portal", "vulnerabilit",
+    )
+    total_t = len(targets) or 1
+    auth_count = 0
+    biz_count = 0
+    for t in targets:
+        p = _urlparse(t["url"]).path.lower()
+        if any(k in p for k in auth_keywords):
+            auth_count += 1
+        if any(k in p for k in biz_keywords):
+            biz_count += 1
+    auth_ratio = auth_count / total_t if targets else 1.0
+    has_auth = bool(args.login_url) or bool(args.cookie)
+    if not has_auth and (not targets or auth_ratio > 0.3 or biz_count == 0):
+        logger.warning(
+            f"检测到登录页占比 {auth_ratio:.0%}，业务路径 {biz_count} 个；"
+            "目标可能需要登录，未登录将漏扫受保护页面。"
+            "建议加 --login-url/--username/--password 或 --cookie 参数。"
+        )
+    elif has_auth and (not targets or auth_ratio > 0.3):
+        logger.info(
+            f"登录页占比 {auth_ratio:.0%}，已提供认证凭据；"
+            "若仍漏扫受保护页面，请检查 --cookie 值或登录凭据是否正确。"
+        )
+
+    param_targets = _count_param_targets(targets)
+    logger.info(f"带参数可测目标: {param_targets}/{len(targets)}")
+    if param_targets == 0:
+        logger.error(
+            "没有任何带查询参数/POST 参数的目标。"
+            "参数级漏洞（SQLi/XSS/命令注入等）将全部漏报，通常只会剩下 robots.txt。"
+            "常见原因：1) cookie/登录失效 2) DVWA 未设 security=low 3) 爬取深度不够。"
+            "请使用: --login-url ... --username admin --password password "
+            "或 --cookie \"PHPSESSID=xxx; security=low\""
+        )
+        if not session_ok:
+            logger.error("会话预检未通过，强烈建议先修复登录态再扫描。")
+
+    results = []
+    site_plugins = [p for p in plugins if getattr(p, "scope", "param") == "site"]
+    url_plugins = [p for p in plugins if getattr(p, "scope", "param") == "url"]
+    param_plugins = [p for p in plugins if getattr(p, "scope", "param") == "param"]
+
+    submitted_site_plugins = set()
+
     def _has_path(target):
         p = _urlparse(target["url"]).path
         return bool(p) and not p.endswith("/")
 
     with ThreadPoolExecutor(max_workers=args.threads) as executor:
         futures = {}
-        # site 级：每个站点级插件仅提交一次
         for plugin in site_plugins:
             if plugin.name in submitted_site_plugins:
                 continue
@@ -210,7 +258,6 @@ def main():
             future = executor.submit(plugin.check, site_target)
             futures[future] = (plugin.name, site_target)
 
-        # url 级：每个有 path 的 target 提交一次
         for target in targets:
             if not _has_path(target):
                 continue
@@ -218,7 +265,6 @@ def main():
                 future = executor.submit(plugin.check, target)
                 futures[future] = (plugin.name, target)
 
-        # param 级：每个 target 都提交
         for target in targets:
             for plugin in param_plugins:
                 future = executor.submit(plugin.check, target)
@@ -232,15 +278,15 @@ def main():
                     result["url"] = target["url"]
                     result["method"] = target["method"]
                     results.append(result)
-                    logger.warning(f"发现漏洞: {plugin_name} - {target['url']} ({result['severity']})")
+                    logger.warning(
+                        f"发现漏洞: {plugin_name} - {target['url']} ({result['severity']})"
+                    )
             except Exception as e:
                 logger.error(f"插件 {plugin_name} 在 {target['url']} 出错: {e}", exc_info=True)
 
     seen = set()
     unique_results = []
     for r in results:
-        # 优先使用证据 URL（如敏感文件自身的 URL）作为去重键，
-        # 否则回退到被扫描页面 URL，避免同一发现被绑定到不同页面 URL 而重复上报
         evidence = r.get("evidence") or {}
         if isinstance(evidence, dict):
             ev_url = evidence.get("url")
@@ -253,12 +299,17 @@ def main():
             unique_results.append(r)
 
     logger.info(f"扫描完成，发现 {len(unique_results)} 个漏洞（去重后）")
+    if len(unique_results) <= 1 and param_targets == 0:
+        logger.warning(
+            "结果极少且无参数目标，极像会话/DVWA security 配置问题，请复查登录态与 security=low。"
+        )
 
     html_file = generate_html_report(unique_results, args.url, f"{args.output}.html")
     json_file = generate_json_report(unique_results, args.url, f"{args.output}.json")
     logger.info(f"报告已保存: {html_file}, {json_file}")
 
     client.close()
+
 
 if __name__ == "__main__":
     main()

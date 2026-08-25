@@ -1,3 +1,6 @@
+﻿import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import logging
 logging.basicConfig(level=logging.WARNING)
 from http_client import HttpClient
@@ -14,3 +17,4 @@ for t in targets:
     u = t["url"]
     if "sqli" in u or "exec" in u or "xss" in u or "fi/" in u or "fi?" in u:
         print(f"  [{t['method']}] {u}")
+

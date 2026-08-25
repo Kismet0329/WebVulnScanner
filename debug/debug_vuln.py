@@ -1,3 +1,6 @@
+﻿import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 """调试：手动访问 mock DVWA 各漏洞端点，验证返回内容"""
 import logging
 logging.basicConfig(level=logging.WARNING)
@@ -23,3 +26,4 @@ for name, url in tests:
     elapsed = time.time() - t0
     print(f"\n[{name}] {elapsed:.2f}s status={r.status_code}")
     print(f"  body: {r.text[:200]}")
+

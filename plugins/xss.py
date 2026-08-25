@@ -83,11 +83,12 @@ class XSSPlugin(ScannerPlugin):
         patterns = [
             # <script>...marker...</script>
             r'<script[^>]*>[\s\S]*?' + escaped + r'[\s\S]*?</script>',
-            # 事件处理器：on\w+="..." 内含 marker
+            # 事件处理器：onerror=alert("MARKER") / onmouseover='...'
             r'on\w+\s*=\s*["\'][^"\']*' + escaped,
-            # marker 作为新标签起始（如反射出 <marker... 或 "><img...marker）
+            r'on\w+\s*=\s*[^>\s]*' + escaped,
+            # marker 作为新标签起始
             r'<' + escaped,
-            # marker 出现在标签名或属性中（如 <a href=marker），需 marker 跟在标签内
+            # 属性值中直接出现 marker
             r'<[^>]*\b\w+\s*=\s*["\']?\s*' + escaped,
         ]
         for pat in patterns:

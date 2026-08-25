@@ -1,3 +1,6 @@
+﻿import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 """调试 crawler 单 URL 解析"""
 import logging
 logging.basicConfig(level=logging.WARNING)
@@ -23,3 +26,4 @@ for l in new_links:
 print(f"found_targets ({len(crawler.found_targets)}):")
 for t in crawler.found_targets:
     print(f"  [{t['method']}] {t['url']}")
+

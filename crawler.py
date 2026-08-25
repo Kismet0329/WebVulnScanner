@@ -130,6 +130,38 @@ class Crawler:
         path = urlparse(url).path.lower()
         return any(pat in path for pat in self.LOGOUT_PATTERNS)
 
+    LOGIN_PATH_KEYWORDS = ("login", "signin", "sign-in", "sign_in", "auth/login")
+    LOGIN_BODY_MARKERS = (
+        'name="username"', 'name="password"', "user_token",
+        "please enter your credentials", "用户登录", "login.php",
+    )
+
+    def _is_login_url(self, url):
+        path = urlparse(url).path.lower()
+        return any(k in path for k in self.LOGIN_PATH_KEYWORDS)
+
+    def _response_is_login_page(self, resp, requested_url):
+        """判断响应是否为登录页（会话失效时的典型表现）。
+
+        根因：未登录访问受保护页会被 302 到 login.php；requests 默认跟随重定向后
+        返回 200 + 登录表单 HTML。若把该 HTML 当业务页解析，会把登录表单当成
+        漏洞目标，参数插件全部空转，最终只剩 robots.txt 等站点级发现。
+        """
+        if resp is None:
+            return True
+        final_url = getattr(resp, "url", "") or ""
+        requested_is_login = self._is_login_url(requested_url)
+        final_is_login = self._is_login_url(final_url)
+        # 请求业务页却落到登录页
+        if final_is_login and not requested_is_login:
+            return True
+        if requested_is_login:
+            return False
+        body = (resp.text or "")[:3000].lower()
+        has_password_field = 'name="password"' in body or "name='password'" in body
+        has_user_field = 'name="username"' in body or "name='username'" in body or "user_token" in body
+        return has_password_field and has_user_field
+
     def _process_url(self, url, depth):
         # 跳过注销类 URL，避免在爬取过程中销毁会话
         if self._is_logout_url(url):
@@ -139,13 +171,30 @@ class Crawler:
             self.rate_limiter.acquire()
             if self.js_render:
                 html = self._render_js(url)
+                # JS 渲染无 Response 对象，用内容启发式判断
+                class _Fake:
+                    pass
+                fake = _Fake()
+                fake.url = url
+                fake.text = html or ""
+                fake.status_code = 200 if html else 0
+                if not html or self._response_is_login_page(fake, url):
+                    if html and self._response_is_login_page(fake, url):
+                        self.logger.warning(
+                            f"爬取 {url} 得到登录页内容，会话可能失效，跳过表单提取"
+                        )
+                    return []
             else:
                 resp = self.client.get(url)
-                # 200 才是有效爬取；3xx 已被 requests 自动跟随，到这里仍是 3xx 说明重定向到 login
-                # 401/403/5xx 同样跳过，但记录到日志便于排查
                 if resp.status_code != 200:
                     if resp.status_code in (401, 403):
                         self.logger.debug(f"访问 {url} 返回 {resp.status_code}，可能需要登录")
+                    return []
+                if self._response_is_login_page(resp, url):
+                    self.logger.warning(
+                        f"爬取 {url} 被导向登录页（最终 URL: {resp.url}），"
+                        "会话失效或未登录，跳过以免把登录表单当成扫描目标"
+                    )
                     return []
                 html = resp.text
         except Exception as e:
@@ -157,7 +206,7 @@ class Crawler:
         for a in soup.find_all("a", href=True):
             href = a["href"]
             full_url = urljoin(url, href)
-            if self._is_valid_url(full_url):
+            if self._is_valid_url(full_url) and not self._is_logout_url(full_url):
                 new_links.add(normalize_url(full_url))
         for form in soup.find_all("form"):
             action = form.get("action", "")
@@ -165,6 +214,11 @@ class Crawler:
             if method not in ("get", "post"):
                 method = "get"
             full_action = urljoin(url, action) if action else url
+            # 不把登录/注销表单当作注入测试目标
+            if self._is_login_url(full_action) or self._is_logout_url(full_action):
+                if self._is_valid_url(full_action) and not self._is_logout_url(full_action):
+                    new_links.add(normalize_url(full_action))
+                continue
             inputs = form.find_all(["input", "textarea", "select"])
             params = {}
             for inp in inputs:
@@ -172,12 +226,10 @@ class Crawler:
                 if name:
                     params[name] = inp.get("value", "")
             if method == "get":
-                # GET 表单：把带参数的 URL 作为 target 提交，让参数级插件能测到这些参数
-                # 注意：原来只放入 new_links，参数会被 _add_target 丢弃；这里显式提交
+                # GET 表单：把带参数的 URL 作为 target，让参数级插件能测到
                 if params:
                     full_url_with_params = full_action + "?" + urlencode(params)
                     if self._is_valid_url(full_url_with_params):
-                        # 作为 GET target 提交（含参数）
                         self._add_target(full_url_with_params, "GET", None)
                         new_links.add(normalize_url(full_url_with_params))
                 else:
@@ -189,7 +241,7 @@ class Crawler:
                     new_links.add(normalize_url(full_action))
         for iframe in soup.find_all("iframe", src=True):
             full_url = urljoin(url, iframe["src"])
-            if self._is_valid_url(full_url):
+            if self._is_valid_url(full_url) and not self._is_logout_url(full_url):
                 new_links.add(normalize_url(full_url))
         return list(new_links)
 

@@ -1,3 +1,6 @@
+﻿import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 """调试：完全模拟 scanner 调用插件的方式"""
 import logging
 logging.basicConfig(level=logging.WARNING)
@@ -29,3 +32,4 @@ for cls, test_url in [
         print(f"[+] {cls.__name__}: {result.get('type')} - {result.get('detail')}")
     else:
         print(f"[-] {cls.__name__}: 未发现  url={test_url}")
+

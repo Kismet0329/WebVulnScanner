@@ -1,3 +1,6 @@
+﻿import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 """调试：复用 scanner 的 crawler，看爬到哪些 URL"""
 import logging
 logging.basicConfig(level=logging.WARNING)
@@ -16,3 +19,4 @@ targets = crawler.crawl("http://127.0.0.1:8888/")
 print(f"\n爬到 {len(targets)} 个 targets:")
 for t in targets:
     print(f"  [{t['method']}] {t['url']}  params={t.get('params')}")
+
