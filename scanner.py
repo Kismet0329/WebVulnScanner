@@ -101,11 +101,18 @@ def main():
             biz_count += 1
     total_t = len(targets)
     auth_ratio = auth_count / total_t
-    if not args.login_url and (auth_ratio > 0.3 or biz_count == 0):
+    # 用户已提供 cookie 或登录 URL 时跳过登录提示：用户已明确处理了认证
+    has_auth = bool(args.login_url) or bool(args.cookie)
+    if not has_auth and (auth_ratio > 0.3 or biz_count == 0):
         logger.warning(
             f"检测到登录页占比 {auth_ratio:.0%}，业务路径 {biz_count} 个；"
             "目标可能需要登录，未登录将漏扫受保护页面。"
-            "建议加 --login-url/--username/--password 参数。"
+            "建议加 --login-url/--username/--password 或 --cookie 参数。"
+        )
+    elif has_auth and auth_ratio > 0.3:
+        logger.info(
+            f"登录页占比 {auth_ratio:.0%}，已提供认证凭据；"
+            "若仍漏扫受保护页面，请检查 --cookie 值或登录凭据是否正确。"
         )
 
     results = []

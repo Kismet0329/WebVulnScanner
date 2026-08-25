@@ -21,6 +21,12 @@ import re
 
 AUTHENTICATED_SESSIONS = set()
 PENDING_TOKENS = {}
+WELL_KNOWN_SESSIONS = {
+    # 支持 --cookie 模式自测：扫描器直接提供此 PHPSESSID 即可跳过登录
+    "e8a5b6c2d4f0a8b2c4d6e8f0a2c4b6d8",
+}
+# 初始化时把已知 session 加入已认证集合
+AUTHENTICATED_SESSIONS.update(WELL_KNOWN_SESSIONS)
 
 
 class MockDVWAHandler(http.server.BaseHTTPRequestHandler):
@@ -280,6 +286,7 @@ def main():
     httpd.daemon_threads = True
     print(f"[*] Mock DVWA 监听 http://127.0.0.1:{args.port}/login.php")
     print(f"[*] 凭据: admin / password")
+    print(f"[*] --cookie 自测: PHPSESSID={next(iter(WELL_KNOWN_SESSIONS))}; Security=low")
     print(f"[*] 漏洞页面:")
     print(f"    /vulnerabilities/sqli/?id=1'         报错注入")
     print(f"    /vulnerabilities/sqli_blind/?id=1'    时间盲注")

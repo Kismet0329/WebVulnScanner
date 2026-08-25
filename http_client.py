@@ -27,10 +27,23 @@ class HttpClient:
                     key, value = h.split(":", 1)
                     self.session.headers[key.strip()] = value.strip()
         if cookies:
-            for c in cookies:
-                if "=" in c:
-                    key, value = c.split("=", 1)
-                    self.session.cookies.set(key.strip(), value.strip())
+            # 用户可能传入两种格式：
+            #   1) 多次 --cookie "k1=v1" --cookie "k2=v2"    （append 成 list，每项一个 cookie）
+            #   2) 一次 --cookie "k1=v1; k2=v2; k3=v3"     （append 成 list，单项含分号）
+            # 需要同时支持：先按分号再按等号切分。
+            # 对 localhost / IP 场景，不设置 domain（保持 Host-only cookie），
+            # 避免显式 domain 导致 CookieJar 匹配失败（ExperienceRecall 609349）。
+            for raw in cookies:
+                for part in raw.split(";"):
+                    part = part.strip()
+                    if not part or "=" not in part:
+                        continue
+                    key, value = part.split("=", 1)
+                    key = key.strip()
+                    value = value.strip()
+                    if not key:
+                        continue
+                    self.session.cookies.set(key, value)
         if proxy:
             self.session.proxies = {"http": proxy, "https": proxy}
         self.session.verify = verify_ssl
