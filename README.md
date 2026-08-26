@@ -257,8 +257,7 @@ python -m unittest discover -s tests -v
 ---
 
 ## 作者
-
-**刘子健** · 网络空间安全专业  
+  
 GitHub: [@Kismet0329](https://github.com/Kismet0329)
 
 如有问题或建议，欢迎提交 [Issue](https://github.com/Kismet0329/WebVulnScanner/issues)。
