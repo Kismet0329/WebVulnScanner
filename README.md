@@ -1,17 +1,85 @@
 # WebVulnScanner
 
-基于 Python 的插件化 Web 漏洞扫描器，支持多线程、速率控制、参数白名单与误报控制，输出 HTML/JSON 报告。
+[![Python](https://img.shields.io/badge/Python-3.8%2B-blue.svg)](https://www.python.org/)
+[![License](https://img.shields.io/badge/License-Research%20Only-red.svg)](#免责声明)
 
-**仅用于授权测试环境（如自建 DVWA）。禁止对未授权目标扫描。**
+基于 Python 的**插件化 Web 漏洞扫描器**，面向授权渗透测试与安全评估场景。  
+支持爬虫发现、多插件并发检测、误报控制、限速与 HTML/JSON 报告输出。
 
-## 功能特性
+> **⚠️ 仅用于已获得书面授权的目标（如自建 DVWA / Mock 靶场）。禁止对未授权系统进行扫描。**
 
-- **插件化架构**：漏洞检测逻辑独立成类，动态加载，易于扩展
-- **检测插件**：SQLi、反射 XSS、目录遍历、LFI、命令注入、SSRF、IDOR、未授权访问、敏感文件、备份文件
-- **误报控制**：参数白名单、响应净化、多重验证、相似度阈值、confidence 分级
-- **爬虫**：并发爬取、表单提取、URL 去重、深度限制、外域过滤、跳过 logout、识别登录重定向
-- **限速**：令牌桶 + 抖动 + 固定延迟
-- **会话**：Cookie / Header / 代理 / 自动登录（含 CSRF）/ DVWA `security=low` 自动纠正
+**作者：** [Kismet0329](https://github.com/Kismet0329)  
+**仓库：** https://github.com/Kismet0329/WebVulnScanner
+
+---
+
+## 亮点
+
+| 能力 | 说明 |
+|------|------|
+| 插件化架构 | 检测逻辑独立成插件，动态加载，易于扩展新漏洞类型 |
+| Web 漏洞覆盖 | SQLi、反射 XSS、IDOR、SSRF、命令注入、目录遍历、LFI 等 |
+| 误报控制 | 参数白名单、响应净化、相似度阈值、confidence 分级 |
+| 会话感知 | 自动登录、Cookie 注入、会话预检（避免未登录漏扫） |
+| 爬虫引擎 | 并发爬取、表单提取、深度限制、外域过滤、跳过 logout |
+| 限速保护 | 令牌桶 + 抖动 + 固定延迟，避免对靶场造成过大压力 |
+| 报告输出 | 生成 HTML / JSON 结构化报告，便于评估与归档 |
+
+---
+
+## 架构概览
+
+```mermaid
+flowchart LR
+    A[scanner.py 入口] --> B[HttpClient 会话/登录]
+    B --> C[Crawler 爬虫]
+    C --> D[URL / 表单 / 参数目标]
+    D --> E[Plugin Loader 动态加载]
+    E --> F1[sqli]
+    E --> F2[xss]
+    E --> F3[idor]
+    E --> F4[ssrf]
+    E --> F5[其他插件...]
+    F1 --> G[误报过滤 + confidence]
+    F2 --> G
+    F3 --> G
+    F4 --> G
+    F5 --> G
+    G --> H[reporter.py]
+    H --> I[report.html]
+    H --> J[report.json]
+```
+
+**扫描流程：**
+
+```
+配置目标 → 会话预检 → 爬虫收集入口 → 插件并发检测 → 结果去误报 → 输出报告
+```
+
+---
+
+## 检测插件
+
+| 插件名 | 说明 |
+|--------|------|
+| `sqli` | SQL 注入（报错/布尔等基础探测） |
+| `xss` | 反射型 XSS |
+| `idor` | 不安全的直接对象引用 / 越权 |
+| `ssrf` | 服务端请求伪造 |
+| `command_injection` | 命令注入 |
+| `directory_traversal` | 目录遍历 |
+| `file_inclusion` | 本地/远程文件包含 |
+| `unauthorized_access` | 未授权访问 |
+| `sensitive_files` | 敏感文件泄露（如 robots.txt、.git 等） |
+| `backup_files` | 备份文件探测 |
+
+列出全部插件：
+
+```bash
+python scanner.py --list-plugins
+```
+
+---
 
 ## 环境要求
 
@@ -33,43 +101,47 @@ venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-可选 JS 渲染：
+可选 JS 渲染（部分动态页面）：
 
 ```bash
 pip install playwright
 playwright install chromium
 ```
 
+---
+
 ## 快速开始
 
-列出插件（无需 `-u`）：
+### 1. 扫描本地 Mock DVWA（推荐入门）
 
 ```bash
-python scanner.py --list-plugins
-```
-
-### 扫描本地 Mock DVWA
-
-```bash
-# 终端 1
+# 终端 1：启动 Mock 靶场
 python mock_dvwa_full.py --port 8888
 
-# 终端 2：推荐用自动登录
+# 终端 2：自动登录并扫描
 python scanner.py -u http://127.0.0.1:8888/ \
   --login-url http://127.0.0.1:8888/login.php \
   --username admin --password password \
   -o report_dvwa
 ```
 
-或使用 Cookie（**必须小写 `security=low`**）：
+扫描完成后查看：
+
+- `report_dvwa.html` — 可视化报告
+- `report_dvwa.json` — 结构化结果
+- `scanner.log` — 运行日志
+
+### 2. 使用 Cookie 扫描
 
 ```bash
 python scanner.py -u http://127.0.0.1:8888/ \
-  --cookie "PHPSESSID=e8a5b6c2d4f0a8b2c4d6e8f0a2c4b6d8; security=low" \
+  --cookie "PHPSESSID=xxx; security=low" \
   -o report_cookie
 ```
 
-### 扫描真实 DVWA
+> DVWA 必须带小写 `security=low`（不是 `Security=low`）。
+
+### 3. 扫描真实 DVWA
 
 ```bash
 python scanner.py -u http://127.0.0.1/DVWA/ \
@@ -79,15 +151,29 @@ python scanner.py -u http://127.0.0.1/DVWA/ \
   -o report_dvwa
 ```
 
-## 常见问题：为什么只扫到 1 个漏洞？
+### 4. 只运行部分插件
 
-日志里若几乎只有 `sensitive_files` / `robots.txt`，通常是：
+```bash
+python scanner.py -u http://127.0.0.1:8888/ \
+  --login-url http://127.0.0.1:8888/login.php \
+  --username admin --password password \
+  --only-plugins sqli,xss,idor \
+  -o report_partial
+```
 
-1. **登录态失效**：Cookie 过期或错误 → 受保护页全部 302 到登录页 → 参数插件无目标可测  
-2. **`Security=low` 写成了大写**：真实 DVWA 只认小写 `security`；会话看起来正常，但漏洞页仍为 high/impossible，注入全部失败  
-3. **未登录就扫**：请加 `--login-url` 或有效 `--cookie`
+---
 
-扫描器会自动把 `Security` 纠正为 `security`，并在登录后设置 `--security-level`（默认 `low`）。若仍只有 1 条结果，请查看日志中的「会话预检」与「带参数可测目标」提示。
+## 报告示例
+
+扫描结束后会生成 HTML 报告，包含：
+
+- 目标 URL、扫描时间、漏洞总数
+- 按插件 / 严重程度 / URL 列出的漏洞清单
+- 每条结果的 confidence 与详情字段
+
+JSON 报告便于二次处理或接入其他评估流程。
+
+---
 
 ## 主要参数
 
@@ -103,18 +189,44 @@ python scanner.py -u http://127.0.0.1/DVWA/ \
 | `--js-render` | Playwright 渲染 |
 | `-o` | 报告文件名前缀 |
 
+---
+
+## 常见问题
+
+### 为什么只扫到 1 个漏洞？
+
+日志里若几乎只有 `sensitive_files` / `robots.txt`，通常是：
+
+1. **登录态失效**：Cookie 过期或错误 → 受保护页 302 到登录页 → 参数插件无目标可测
+2. **`Security=low` 写成了大写**：真实 DVWA 只认小写 `security`
+3. **未登录就扫**：请加 `--login-url` 或有效 `--cookie`
+
+扫描器会在启动时做**会话预检**，并在日志中提示「带参数可测目标」数量。若预检失败，请先修复登录态再扫描。
+
+---
+
 ## 项目结构
 
 ```
-scanner.py          # 入口
-crawler.py          # 爬虫
-http_client.py      # HTTP / 登录 / Cookie
-plugins/            # 检测插件
-reporter.py         # HTML/JSON 报告
-mock_dvwa_full.py   # 本地靶场
-debug/              # 调试脚本
-tests/              # 单元测试
+WebVulnScanner/
+├── scanner.py          # 入口：调度爬虫、插件、报告
+├── crawler.py          # 爬虫：URL/表单发现
+├── http_client.py      # HTTP 客户端：登录、Cookie、代理
+├── plugin_loader.py    # 插件动态加载
+├── rate_limiter.py     # 令牌桶限速
+├── reporter.py         # HTML / JSON 报告
+├── config.py           # 命令行参数
+├── mock_dvwa_full.py   # 本地 Mock DVWA 靶场
+├── plugins/            # 漏洞检测插件
+│   ├── sqli.py
+│   ├── xss.py
+│   ├── idor.py
+│   └── ...
+├── tests/              # 单元测试
+└── debug/              # 调试脚本
 ```
+
+---
 
 ## 运行测试
 
@@ -122,6 +234,31 @@ tests/              # 单元测试
 python -m unittest discover -s tests -v
 ```
 
+---
+
+## 设计说明
+
+本项目侧重将 Web 渗透测试中的**常见检测思路工程化**：
+
+- **工具负责初筛**：快速覆盖爬虫入口与常见漏洞模式
+- **手工仍不可替代**：复杂逻辑漏洞、业务越权、上下文相关 XSS 等需 Burp 人工分析
+- **误报控制优先**：扫描结果带 confidence 分级，避免「一有响应就报漏洞」
+
+适用于：授权靶场练习、安全评估辅助、漏洞检测插件开发学习。
+
+---
+
 ## 免责声明
 
-本工具仅供安全研究与授权渗透测试使用。使用者须确保已获得目标系统书面授权，并对自身行为负责。
+本工具仅供**安全研究**与**已获得书面授权的渗透测试**使用。  
+使用者须确保扫描行为合法合规，并对自身行为负责。  
+开发者不对任何未授权使用造成的后果承担责任。
+
+---
+
+## 作者
+
+**刘子健** · 网络空间安全专业  
+GitHub: [@Kismet0329](https://github.com/Kismet0329)
+
+如有问题或建议，欢迎提交 [Issue](https://github.com/Kismet0329/WebVulnScanner/issues)。
