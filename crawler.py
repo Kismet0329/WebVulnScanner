@@ -1,10 +1,9 @@
-import json
 import threading
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse, urlencode
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import logging
-from utils import normalize_url
+from utils import normalize_url, target_dedup_key, target_param_richness
 from rate_limiter import TokenBucket
 
 
@@ -288,12 +287,23 @@ class Crawler:
         url = normalize_url(url)
         if self._is_skip_path(url) or self._is_logout_url(url):
             return
-        params_str = json.dumps(params, sort_keys=True) if params else ""
-        key = (method, url, params_str)
+        key = target_dedup_key(method, url, params)
+        new_score = target_param_richness(method, url, params)
         with self._lock:
             if key not in self._seen_target_keys:
                 self._seen_target_keys.add(key)
                 self.found_targets.append({"url": url, "method": method, "params": params})
+                return
+            # 已有同路径目标：若新目标参数更丰富，则升级替换（保留可测 query/POST 字段）
+            for i, existing in enumerate(self.found_targets):
+                if target_dedup_key(existing["method"], existing["url"], existing.get("params")) != key:
+                    continue
+                old_score = target_param_richness(
+                    existing["method"], existing["url"], existing.get("params")
+                )
+                if new_score > old_score:
+                    self.found_targets[i] = {"url": url, "method": method, "params": params}
+                break
 
     def _render_js(self, url):
         """使用复用的浏览器实例渲染页面，避免每个 URL 重启浏览器"""

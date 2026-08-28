@@ -8,6 +8,7 @@ from rate_limiter import TokenBucket
 from crawler import Crawler
 from plugin_loader import load_plugins
 from reporter import generate_html_report, generate_json_report
+from utils import deduplicate_results
 
 
 def setup_logging(log_file="scanner.log"):
@@ -284,19 +285,12 @@ def main():
             except Exception as e:
                 logger.error(f"插件 {plugin_name} 在 {target['url']} 出错: {e}", exc_info=True)
 
-    seen = set()
-    unique_results = []
-    for r in results:
-        evidence = r.get("evidence") or {}
-        if isinstance(evidence, dict):
-            ev_url = evidence.get("url")
-        else:
-            ev_url = None
-        primary_url = ev_url or r.get("url", "")
-        key = (primary_url, r["plugin"], r.get("type", ""))
-        if key not in seen:
-            seen.add(key)
-            unique_results.append(r)
+    unique_results = deduplicate_results(results)
+    if len(results) != len(unique_results):
+        logger.info(
+            f"去重: {len(results)} 条原始结果 -> {len(unique_results)} 条"
+            "（按路径+插件+类型+参数名合并）"
+        )
 
     logger.info(f"扫描完成，发现 {len(unique_results)} 个漏洞（去重后）")
     if len(unique_results) <= 1 and param_targets == 0:

@@ -4,7 +4,14 @@ from urllib.parse import urlparse
 from config import parse_args
 from http_client import HttpClient
 from plugin_loader import load_plugins
-from utils import normalize_url, response_similarity, get_meaningful_content
+from utils import (
+    normalize_url,
+    response_similarity,
+    get_meaningful_content,
+    target_dedup_key,
+    result_dedup_key,
+    deduplicate_results,
+)
 
 
 class TestConfig(unittest.TestCase):
@@ -79,6 +86,69 @@ class TestUtils(unittest.TestCase):
         text = get_meaningful_content(html)
         self.assertIn("Hello", text)
         self.assertNotIn("1234567890123", text)
+
+    def test_target_dedup_key_ignores_param_values(self):
+        k1 = target_dedup_key("GET", "http://t/vul/sqli.php?name=alice")
+        k2 = target_dedup_key("GET", "http://t/vul/sqli.php?name=bob")
+        self.assertEqual(k1, k2)
+
+    def test_target_dedup_key_merges_empty_and_query(self):
+        k1 = target_dedup_key("GET", "http://t/vul/sqli.php")
+        k2 = target_dedup_key("GET", "http://t/vul/sqli.php?name=test")
+        self.assertEqual(k1, k2)
+
+    def test_target_dedup_key_distinguishes_methods(self):
+        k1 = target_dedup_key("GET", "http://t/vul/sqli.php?name=1")
+        k2 = target_dedup_key("POST", "http://t/vul/sqli.php", {"name": ""})
+        self.assertNotEqual(k1, k2)
+
+    def test_result_dedup_key_merges_get_post_same_param(self):
+        base = {
+            "plugin": "sqli",
+            "type": "error_based_sqli",
+            "evidence": {"param": "name"},
+        }
+        k_get = result_dedup_key({**base, "url": "http://t/vul/sqli.php?name=a"})
+        k_post = result_dedup_key({**base, "url": "http://t/vul/sqli.php"})
+        self.assertEqual(k_get, k_post)
+
+    def test_result_dedup_key_uses_evidence_url(self):
+        r = {
+            "plugin": "xss",
+            "type": "reflected_xss",
+            "url": "http://t/vul/xss.php?msg=1",
+            "evidence": {
+                "param": "msg",
+                "evidence_url": "http://t/vul/xss.php?msg=2",
+            },
+        }
+        k = result_dedup_key(r)
+        self.assertEqual(k[0], "/vul/xss.php")
+
+    def test_deduplicate_results(self):
+        results = [
+            {
+                "plugin": "sqli",
+                "type": "error_based_sqli",
+                "url": "http://t/vul/sqli.php?name=1",
+                "evidence": {"param": "name"},
+            },
+            {
+                "plugin": "sqli",
+                "type": "error_based_sqli",
+                "url": "http://t/vul/sqli.php",
+                "method": "POST",
+                "evidence": {"param": "name"},
+            },
+            {
+                "plugin": "xss",
+                "type": "reflected_xss",
+                "url": "http://t/vul/sqli.php?name=1",
+                "evidence": {"param": "name"},
+            },
+        ]
+        deduped = deduplicate_results(results)
+        self.assertEqual(len(deduped), 2)
 
 
 class TestCrawlerLoginDetection(unittest.TestCase):
